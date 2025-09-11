@@ -1,8 +1,8 @@
-import express, { Application } from 'express';
+import { Application } from "express";
+import config from "./config/config";
 
 
-const app: Application = express();
+const app: Application = config.getApp();
 
 
 
-module.exports = app;
