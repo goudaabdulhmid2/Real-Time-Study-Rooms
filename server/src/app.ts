@@ -3,6 +3,7 @@ import morgan from 'morgan';
 
 
 import config from "./config/config";
+import prisma from './config/db'
 
 
 const app: Application = config.getApp();

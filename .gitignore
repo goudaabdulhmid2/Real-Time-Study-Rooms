@@ -6,3 +6,4 @@ node_modules/
 dist/
 logs/
 build/
+/server/src/generated/prisma
