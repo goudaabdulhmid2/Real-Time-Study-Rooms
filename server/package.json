@@ -260,7 +260,8 @@
     "which-typed-array": "^1.1.19",
     "word-wrap": "^1.2.5",
     "wrappy": "^1.0.2",
-    "yocto-queue": "^0.1.0"
+    "yocto-queue": "^0.1.0",
+    "zod": "^4.1.8"
   },
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",

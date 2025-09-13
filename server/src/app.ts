@@ -1,9 +1,10 @@
-import express, { Application } from "express";
+import express, { Application, Request, Response, NextFunction } from "express";
 import morgan from 'morgan';
 
 
 import config from "./config/config";
-import prisma from './config/db'
+import errorHandler from "./middleware/errorHandler";
+import ApiError from "./utils/ApiError";
 
 
 const app: Application = config.getApp();
@@ -15,3 +16,12 @@ if (process.env.NODE_ENV === 'development') {
     app.use(morgan('dev'));
 }
 
+
+app.all("*", (req: Request, res: Response, next: NextFunction) => {
+    return next(
+        new ApiError(`Can't find this route ${req.originalUrl}`, 400, "fail", true)
+    )
+})
+
+// Global error handling middleware
+app.use(errorHandler);
