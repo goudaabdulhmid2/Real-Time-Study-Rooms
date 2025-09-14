@@ -9,6 +9,7 @@ import {
     ErrorResponse,
     PrismaErrorConfig,
 } from "../types/errorTypes";
+import logger from "../config/logger";
 
 
 // Separate error message formatting
@@ -31,10 +32,10 @@ const formatErrorResponse = (err: ApiError, includeDetails: boolean = false): Er
         message: err.message,
         timestamp: err.timestamp || new Date(),
         errorCode: err.errorCode,
-        details: err.details
     };
 
     if (includeDetails) {
+        response.details = err.details;
         response.stack = err.stack;
         response.error = err;
     }
@@ -164,7 +165,7 @@ const handleNonApiError = (err: Error): ApiError => {
 }
 
 const sendErrorDev = (err: ApiError, res: Response) => {
-    console.error("Error (DEV) ", err);
+    logger.error("Error (DEV) ", err);
 
     res.status(err.statusCode).json(formatErrorResponse(err, true));
 }

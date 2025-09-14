@@ -1,10 +1,10 @@
 import express, { Application, Request, Response, NextFunction } from "express";
-import morgan from 'morgan';
 
 
 import config from "./config/config";
 import errorHandler from "./middleware/errorHandler";
 import ApiError from "./utils/ApiError";
+import requestLogger from "./middleware/requestLogger";
 
 
 const app: Application = config.getApp();
@@ -12,9 +12,9 @@ const app: Application = config.getApp();
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }))
 
-if (process.env.NODE_ENV === 'development') {
-    app.use(morgan('dev'));
-}
+
+app.use(requestLogger);
+
 
 
 app.all("*", (req: Request, res: Response, next: NextFunction) => {

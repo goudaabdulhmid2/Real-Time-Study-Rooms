@@ -3,9 +3,10 @@ dotenv.config();
 
 import config from './config/config';
 import './app';
+import logger from './config/logger';
 
 process.on("uncaughtException", err => {
-    console.error("Uncaught Exception:", err);
+    logger.error("Uncaught Exception:", err);
 
     // close server 
     config.stopApp().finally(() => {
@@ -17,7 +18,7 @@ process.on("uncaughtException", err => {
 config.runApp();
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error("Unhandled Rejection at:", promise, "reason:", reason);
+    logger.error("Unhandled Rejection at:", promise, "reason:", reason);
     config.stopApp().finally(() => {
         process.exit(1);
     });

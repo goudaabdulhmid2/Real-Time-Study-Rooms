@@ -1,5 +1,6 @@
 import express, { Application } from 'express';
 import { Server } from 'http';
+import logger from './logger';
 
 
 class Config {
@@ -41,9 +42,9 @@ class Config {
     public async runApp(): Promise<void> {
         try {
             await this.listenAsync();
-            console.log(`Server is running on PORT ${this.PORT}`)
+            logger.info(`Server is running on PORT ${this.PORT}`)
         } catch (err) {
-            console.log(`Error running the app:`, err);
+            logger.error(`Error running the app:`, err);
             process.exit(1);
         }
     }
