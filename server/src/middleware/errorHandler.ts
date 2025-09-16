@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { Prisma } from "@prisma/client";
 import { ZodError } from 'zod';
+import { UnauthorizedError } from "express-oauth2-jwt-bearer";
 
 import ApiError from "../utils/ApiError";
 import {
@@ -143,6 +144,16 @@ const handleValidationError = (err: ZodError): ApiError => {
     );
 }
 
+const handleUnauthorizedError = (err: UnauthorizedError): ApiError => {
+    return new ApiError(
+        err.message || "Unauthorized access.",
+        401,
+        "fail",
+        true,
+        AppErrorCode.UNAUTHORIZED
+    );
+}
+
 const handleNonApiError = (err: Error): ApiError => {
 
     // Handel Prisma-specific errors 
@@ -152,6 +163,10 @@ const handleNonApiError = (err: Error): ApiError => {
 
     if (err instanceof ZodError) {
         return handleValidationError(err);
+    }
+
+    if (err instanceof UnauthorizedError) {
+        return handleUnauthorizedError(err);
     }
 
     return new ApiError(
