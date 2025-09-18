@@ -17,36 +17,23 @@ enum Role {
   superAdmin
 }
 
-// User model with all relationships
+// User model for Clerk integration
 model User {
-  id           String   @id @default(uuid())
-  name         String
-  email        String   @unique
-  passwordHash String?
-  avatarUrl    String?
-  birthDate    DateTime
-  role         Role     @default(user)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id          String    @id @default(uuid())
+  clerkUserId String    @unique // Clerk's user ID
+  name        String
+  email       String? // Email is managed by Clerk, may be null if not synced
+  avatarUrl   String?
+  birthDate   DateTime?
+  role        Role      @default(user)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   // Relationships
-  providerAccounts    ProviderAccount[]
   ownedRooms          Room[]               @relation("UserOwnedRooms")
   roomParticipants    RoomParticipant[]
   messages            Message[]
   whiteboardSnapshots WhiteboardSnapshot[] @relation("SavedSnapshots")
-}
-
-// Provider Account model for OAuth
-model ProviderAccount {
-  id                String @id @default(uuid()) // Added @id
-  provider          String
-  providerAccountId String
-
-  user   User   @relation(fields: [userId], references: [id])
-  userId String
-
-  @@unique([provider, providerAccountId])
 }
 
 // Room model

@@ -1,11 +1,12 @@
 import express, { Application, Request, Response, NextFunction } from "express";
 
 
+
 import config from "./config/config";
 import errorHandler from "./middleware/errorHandler";
 import ApiError from "./utils/ApiError";
 import requestLogger from "./middleware/requestLogger";
-
+import { clerkMiddleware } from './config/clerk';
 
 const app: Application = config.getApp();
 
@@ -14,6 +15,9 @@ app.use(express.urlencoded({ extended: true, limit: '100mb' }))
 
 
 app.use(requestLogger);
+
+
+app.use(clerkMiddleware());
 
 
 
