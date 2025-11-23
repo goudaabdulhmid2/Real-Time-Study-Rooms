@@ -23,7 +23,7 @@
   "main": "server.js",
   "dependencies": {
     "@clerk/backend": "^2.14.0",
-    "@clerk/clerk-sdk-node": "^4.13.23",
+    "ddk-node": "^4.13.23",
     "@clerk/express": "^1.7.31",
     "@prisma/client": "^6.16.1",
     "acorn": "^8.15.0",

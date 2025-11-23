@@ -7,6 +7,7 @@ import errorHandler from "./middleware/errorHandler";
 import ApiError from "./utils/ApiError";
 import requestLogger from "./middleware/requestLogger";
 import { clerkMiddleware } from './config/clerk';
+import usersRoute from './routes/user.admin.route'
 
 const app: Application = config.getApp();
 
@@ -20,12 +21,15 @@ app.use(requestLogger);
 app.use(clerkMiddleware());
 
 
+app.use('/api/v1/users', usersRoute)
 
-app.all("*", (req: Request, res: Response, next: NextFunction) => {
+
+// Catch-all for unknown routes (use app.use to avoid path-to-regexp parsing issues)
+app.use((req: Request, res: Response, next: NextFunction) => {
     return next(
         new ApiError(`Can't find this route ${req.originalUrl}`, 400, "fail", true)
-    )
-})
+    );
+});
 
 // Global error handling middleware
 app.use(errorHandler);
