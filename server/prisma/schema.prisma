@@ -7,6 +7,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // Model for user roles
@@ -33,6 +34,8 @@ model User {
   roomParticipants    RoomParticipant[]
   messages            Message[]
   whiteboardSnapshots WhiteboardSnapshot[] @relation("SavedSnapshots")
+
+  @@index([email])
 }
 
 // Room model
@@ -44,25 +47,29 @@ model Room {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  owner   User   @relation("UserOwnedRooms", fields: [ownerId], references: [id])
   ownerId String
+  owner   User   @relation("UserOwnedRooms", fields: [ownerId], references: [id])
 
   // Relationships
   roomParticipants    RoomParticipant[]
   messages            Message[]
   whiteboardSnapshots WhiteboardSnapshot[]
+
+  @@index([ownerId])
 }
 
 // Join table for the many-to-many relationship
 model RoomParticipant {
   userId   String
   roomId   String
-  joinedAt DateTime @default(now())
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime? // optional, used to track when user left the room
 
-  user User @relation(fields: [userId], references: [id])
-  room Room @relation(fields: [roomId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@id([userId, roomId])
+  @@index([roomId])
 }
 
 // Message model
@@ -70,13 +77,15 @@ model Message {
   id          String   @id @default(uuid())
   text        String
   attachments Json?
-  timestamp   DateTime @default(now())
+  createdAt   DateTime @default(now())
 
   senderId String
   roomId   String
 
   sender User @relation(fields: [senderId], references: [id])
   room   Room @relation(fields: [roomId], references: [id])
+
+  @@index([roomId, createdAt])
 }
 
 // Whiteboard Snapshot model
@@ -85,9 +94,11 @@ model WhiteboardSnapshot {
   dataUrl   String
   createdAt DateTime @default(now())
 
-  roomId  String
-  savedBy String
+  roomId    String
+  savedById String
 
-  room Room @relation(fields: [roomId], references: [id])
-  user User @relation(name: "SavedSnapshots", fields: [savedBy], references: [id]) // Named the relation
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User @relation(name: "SavedSnapshots", fields: [savedById], references: [id], onDelete: Cascade)
+
+  @@index([roomId, createdAt])
 }

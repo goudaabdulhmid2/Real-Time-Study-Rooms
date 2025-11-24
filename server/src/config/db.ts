@@ -1,20 +1,13 @@
 import { PrismaClient } from '@prisma/client';
 
-
-class DB {
-    private static instance: PrismaClient | null = null;
-
-    public static getInstance(): PrismaClient {
-        if (!DB.instance) {
-            DB.instance = new PrismaClient();
-        }
-        return DB.instance;
-    }
+declare global {
+    var prisma: PrismaClient | undefined;
 }
 
-// Graceful shutdown: disconnect Prisma on process exit
-process.on('beforeExit', async () => {
-    await DB.getInstance().$disconnect();
-});
+export const prisma =
+    global.prisma ??
+    new PrismaClient({
+        log: ['query', 'info', 'warn', 'error'],
+    });
 
-export default DB.getInstance();
+if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
