@@ -1,70 +1,165 @@
-# Database Design
+# Proposed v1 Database Design
 
-## 1. Status and scope
+**Status: Proposed v1 design — pending final review.** This document combines confirmed product decisions with proposed conceptual entities and implementation constraints. The Prisma schema declares the seven models and partial indexes. The initial migration has been created and reviewed but is not yet applied. Transactions, Redis keys, scheduler behavior, and APIs remain unimplemented unless stated otherwise.
 
-**Status: Draft — pending product decisions.** This document records a conceptual starting point for the initial relational domain. It explains proposed entities and integrity rules; it is not a finalized implementation specification.
+The current Prisma schema at `apps/api/prisma/schema.prisma` declares the seven models described below and their partial unique indexes. The initial migration has been created and reviewed but is not applied, so the corresponding tables, indexes, and CHECK constraints do not yet exist in the database. The project stack is NestJS, Prisma 7.10.1, PostgreSQL 17 for local development, and Redis for the live Lobby queue. No application feature, background job, Redis key, or scheduler implementation is claimed here.
 
-The current Prisma schema at `apps/api/prisma/schema.prisma` defines the Prisma client generator and a PostgreSQL datasource, but it contains **no application models**. The design below is therefore conceptual and is not a description of implemented Prisma models. No migration is claimed to have been run. The Prisma 7 configuration points at the schema and migrations directory and obtains the connection URL from `DATABASE_URL`; this document does not inspect or reproduce environment values.
+## 1. Design goals and storage choices
 
-The scope here is the first version of users, study rooms, room membership, and the Scheduled Room Lobby design. Product behavior described as confirmed below is distinct from implementation details that remain pending. This document does not claim that Prisma models, Redis keys, migrations, background jobs, a scheduler, or Lobby code have been implemented.
+The core domain is relational: users own rooms, people join rooms, invitations and moderator assignments relate users to rooms, and ownership transfers have explicit participants and history. PostgreSQL provides foreign keys, uniqueness and check constraints, transactions, and concurrency controls that fit these relationships and integrity requirements.
 
-## 2. Confirmed requirements
+MongoDB could represent this domain and may be suitable for other access patterns. It is not the default for this initial domain because its relationships and cross-record invariants are central to the design. This is a contextual choice, not a claim that SQL is universally superior to NoSQL.
 
-- A room is either **Scheduled** or **Persistent**.
-- A room is **Public** or **Private**, according to its owner's setting.
-- Local Docker development uses **PostgreSQL 17** (the `postgres:17` image in `docker-compose.yml`).
-- The backend uses **NestJS** and **Prisma 7**.
+PostgreSQL is the source of truth for users, rooms, memberships, authorization-related domain data, and capacity enforcement. Redis stores the ephemeral live Lobby queue and transient connection/presence state. Queue state never reserves a seat: admission is decided against PostgreSQL with concurrency-safe capacity enforcement.
 
-These facts describe the current project direction and local setup. They do not imply that the conceptual entities below have already been implemented.
+A hybrid PostgreSQL/Redis design means the systems can fail or disagree independently. The eventual implementation must account for retries, stale queue entries, idempotent admission, reconnection, and recovery without treating Redis state as authoritative. These are design considerations, not completed features.
 
-## 3. Why PostgreSQL instead of MongoDB
+## 2. Core conceptual entities
 
-The initial domain has direct relationships: a user owns rooms, and users join rooms. PostgreSQL represents these relationships with foreign keys, so a room cannot point at a nonexistent owner and a membership cannot point at a nonexistent user or room. Unique constraints can protect identity fields such as email and username. A partial unique index can enforce at most one active membership for a user-room pair while retaining older membership periods.
+The entities and fields below describe the conceptual model and are represented by model declarations in the Prisma schema. They are not yet applied database structures because the initial migration has not been applied. `PK` means primary key and `FK` means foreign key.
 
-Transactions are useful for operations that must change related records together, such as creating a room and its initial owner membership or admitting a participant while respecting room capacity. Relational constraints and transactions provide a strong foundation for keeping these records consistent as the API evolves.
+### User
 
-MongoDB could represent this domain using documents and references, and it remains a viable option if access patterns and product requirements favor its document model. It is not the default here because the core records have meaningful cross-entity relationships and integrity rules; modeling them relationally makes those rules explicit and lets the database enforce many of them. This is a contextual choice for this project's initial domain, not a universal claim that SQL is always better.
+A user is an account identity. `User.id` is a stable UUID and remains in place for historical relationships even after anonymization. Email and username are normalized by trimming and lowercasing before storage and lookup; uniqueness applies to those normalized values. After anonymization, personal fields may be null, obsolete credentials are removed, and the original email and username are released for future registration. A new registration receives a new `User.id`.
 
-Redis is selected for the live Scheduled Room Lobby waiting queue and transient connection/presence state. These are short-lived, operational data that benefits from fast queue operations and expiry. Redis is not authoritative for admission: PostgreSQL remains the source of truth for users, rooms, membership history, authorization-related domain data, and capacity enforcement. Queue order establishes priority, not a guaranteed seat, and admission must be confirmed against PostgreSQL under concurrency control.
+Proposed fields:
 
-The first version does not guarantee restoration of Lobby positions after Redis data loss or a Redis service restart; affected users may need to rejoin. A temporarily disconnected waiting user has a **30-second reconnection grace period**, a product decision for this project rather than a claim about Zoom or Google Meet internals. Reconnection within that period should attempt to retain the user's queue position. Once the period expires, remove the user; a later rejoin enters at the end of the queue.
+- `id`: UUID primary key, retained through anonymization.
+- `email`, `username`: normalized unique identity fields; nullable after anonymization.
+- `passwordHash`: credential hash; removed or null after anonymization.
+- `accountStatus`: `ACTIVE`, `DEACTIVATED`, or `ANONYMIZED`.
+- `createdAt`, `updatedAt`.
+- `deactivatedAt`, `anonymizeAt`: proposed timestamps useful for the approved deactivation workflow.
 
-A future hybrid architecture introduces operational complexity: PostgreSQL and Redis can disagree or fail independently, queue operations need reconnection and expiry handling, and admission must reconcile queue state with current authorization and database capacity. The implementation must define how retries, duplicate attempts, stale queue entries, and service recovery behave without treating Redis as proof that a seat is reserved. A vector-search system may be useful if AI/RAG features need semantic retrieval; that remains separate from this core-domain storage decision.
+### StudyRoom
 
-## 4. Core entities
+A room has one authoritative owner reference. `ownerId` determines ownership and Owner permissions. Ownership does not imply current participation: an owner may have no active `RoomMember` row.
 
-| Entity | Conceptual responsibility | Key design notes |
-| --- | --- | --- |
-| `User` | Account identity and authentication identity | Store a unique email and username, a password hash (never a plaintext password), and creation/update timestamps. Authentication policy such as email normalization and username case sensitivity must inform the eventual unique indexes. |
-| `StudyRoom` | A study space and its lifecycle | Belongs to one owner; stores name, optional description, room type, visibility, positive maximum capacity, schedule fields, status, and timestamps. Schedule nullability depends on room type (see integrity rules). |
-| `RoomMember` | A user's relationship to a room for one membership period | Has a surrogate UUID `id`, references one user and one room, and stores `joinedAt` plus nullable `leftAt`. `leftAt IS NULL` denotes an active membership. Each rejoin creates a new record. |
-| `RoomInvitation` | An invitation for a specific user to access a specific room | References the room, the invited user, and the user who created the invitation. Its exact status values and transitions, and whether repeated invitations for the same user-room pair are allowed, remain undecided. |
-| `RoomAccessCode` | A reusable credential for a specific room | Stores a hash of the code, not the raw code, and references its room and creator. A code may optionally expire and may be revoked. Code generation, hashing details, rate limiting, and uniqueness/index rules remain implementation-level design work. |
+Proposed fields:
 
-`RoomMember` is an explicit entity rather than an unadorned many-to-many relation because the relationship has its own identity and behavior: role, join/leave times, capacity admission, and a history of membership periods. Each join period receives a new surrogate UUID `id`; ending a period sets `leftAt`, and a later rejoin inserts a new row. The `userId` and `roomId` foreign keys identify the related user and room without serving as the row's primary key.
+- `id`: UUID primary key.
+- `ownerId`: foreign key to `User` and authoritative source of ownership.
+- `name`, optional `description`.
+- `roomType`: `SCHEDULED` or `PERSISTENT`.
+- `visibility`: `PUBLIC` or `PRIVATE`.
+- `capacity`: total maximum number of admitted people, including the Owner and Moderators; minimum 2.
+- `scheduledStartAt`, `scheduledEndAt`: required for Scheduled rooms and null for Persistent rooms.
+- `status`, `createdAt`, `updatedAt`.
 
-## 5. Conceptual ERD
+### RoomMember
 
-The following is a **conceptual ERD, not the final Prisma schema**. `PK` marks primary keys, `FK` marks foreign keys, and `UQ candidate` marks a proposed candidate unique field. Email/username uniqueness assumes the product settles normalization and case-sensitivity rules. `RoomMember.id` is the surrogate primary key. The active-pair uniqueness rule is a partial unique index, described below, and is not fully expressed by this conceptual ERD.
+`RoomMember` records participation for one membership period. It is not the authority for Owner or Moderator roles. A Lobby entry does not create membership. A row is created only after successful admission, including when the admitted person is an Owner or Moderator. Every later membership period gets a new row.
+
+Proposed fields:
+
+- `id`: surrogate UUID primary key.
+- `roomId`, `userId`: foreign keys to `StudyRoom` and `User`.
+- `joinedAt`.
+- `leftAt`: nullable; `leftAt IS NULL` means this membership period is active.
+
+There is deliberately **no `role` field** on `RoomMember`. A person can own a room without participating; the Owner's membership is created only on admission. A user's Moderator authority comes from `RoomModeratorAssignment`, whether or not they have an active membership. Keeping assignment separate from membership preserves the role when a Moderator leaves and prevents a membership period from becoming the source of authorization.
+
+### RoomInvitation
+
+An invitation grants a particular user access to a particular room. The recipient and the inviter are separate User relationships: `invitedUserId` identifies who may use the invitation, while `invitedById` records who created it.
+
+Proposed fields:
+
+- `id`: UUID primary key.
+- `roomId`: foreign key to `StudyRoom`.
+- `invitedUserId`: foreign key to the invited `User`.
+- `invitedById`: foreign key to the inviting `User`.
+- `status`: `PENDING`, `ACCEPTED`, `REVOKED`, or `EXPIRED`.
+- `expiresAt`: optional timestamp; exact invitation expiry duration remains undecided.
+- `createdAt`.
+
+Allowed v1 transitions are `PENDING -> ACCEPTED`, `PENDING -> REVOKED`, and `PENDING -> EXPIRED`; other states are terminal. An invitation remains pending while its recipient waits in the Lobby and becomes accepted only after successful admission through that invitation. If revoked or expired while the recipient waits, it cannot authorize admission.
+
+Repeated invitation history is retained, with at most one pending invitation per `(roomId, invitedUserId)`. Before creating a replacement, an expired pending row must be transitioned to `EXPIRED` through a concurrency-safe operation. Do not put a time-dependent expression such as `NOW()` in a partial-index predicate.
+
+### RoomAccessCode
+
+An access code is a reusable credential for one room. The stored value is a hash, not the raw access code. Keeping it separate from `RoomInvitation` captures the different grant semantics: a code can be reused by many users, while an invitation is bound to one recipient.
+
+Proposed fields:
+
+- `id`: UUID primary key.
+- `roomId`: foreign key to `StudyRoom`.
+- `createdById`: foreign key to the creating `User`.
+- `codeHash`.
+- `expiresAt`: optional timestamp.
+- `revokedAt`: nullable timestamp; null means not revoked.
+- `createdAt`.
+
+A code may be used by multiple users, independently of invitations. Only the Owner may create, revoke, or regenerate it. There is at most one unrevoked code record per room at a time. Regeneration atomically revokes the previous code and creates the replacement. If a code has expired but remains unrevoked, mark it revoked before issuing a replacement when required by the uniqueness constraint. Generation/entropy, hashing details, rate limits, and final index strategy remain implementation details. Delivery mechanisms for invitations and codes are not specified or claimed to exist.
+
+### RoomModeratorAssignment
+
+Moderator authority is a separate room-scoped assignment, not a `RoomMember` role. The Owner appoints a Moderator; the assignment becomes active only after the proposed Moderator accepts. An active Moderator assignment remains valid even if the user leaves the room.
+
+Proposed fields:
+
+- `id`: UUID primary key.
+- `roomId`: foreign key to `StudyRoom`.
+- `userId`: foreign key to the assigned Moderator `User`.
+- `assignedById`: foreign key to the assigning Owner `User`.
+- `status`: `PENDING`, `ACTIVE`, `REVOKED`, `DECLINED`, `EXPIRED`, or `CANCELLED`.
+- `assignedAt`, required `expiresAt` (set by the application to seven days after the request is created), optional `acceptedAt`, and optional `revokedAt`.
+
+The request expires after 7 days if unanswered. The Owner may cancel a pending assignment. A reappointment creates a new historical row. At most one pending assignment and at most one active assignment may exist for a `(roomId, userId)` pair, using separate partial unique indexes. On account deactivation, active assignments are revoked. Reactivation during the account grace period does not restore them automatically; reassignment is required.
+
+### OwnershipTransferRequest
+
+Ownership transfer is a separate entity because it requires recipient acceptance and an auditable request lifecycle.
+
+Proposed fields:
+
+- `id`: UUID primary key.
+- `roomId`: foreign key to `StudyRoom`.
+- `requestedById`: foreign key to the current Owner `User`.
+- `targetUserId`: foreign key to the proposed new Owner `User`.
+- `status`: proposed values `PENDING`, `ACCEPTED`, `REJECTED`, `CANCELLED`, or `EXPIRED`.
+- `createdAt`, `expiresAt`, optional `resolvedAt`.
+
+The target must explicitly accept. A request expires after 7 days if unanswered; the current Owner may cancel a pending request. Only one pending transfer may exist per room. The exact state encoding and transition implementation remain implementation details, but acceptance must change ownership atomically. The former Owner loses Owner permissions and does not become a Moderator automatically. They remain an ordinary Member only if already holding an active membership; transfer never creates membership. Any active Moderator assignment held by the former Owner is revoked during transfer. The new Owner gains Owner permissions from `StudyRoom.ownerId` even before joining.
+
+If a user chooses ownership transfer as part of account deletion, the transfer must complete before deactivation. The user can instead proceed with deletion without transferring.
+
+## 3. Conceptual ERD
+
+This Mermaid ERD is **conceptual and does not represent a migrated database**. The Prisma schema declares the seven models, their enums, relations, and partial unique indexes. The initial migration has been created and reviewed but is not applied. The ERD shows the entities, UUID primary keys, foreign keys, and relationship cardinalities. It intentionally does not include a Lobby entity: the live Lobby queue is held in Redis.
 
 ```mermaid
 erDiagram
     User ||--o{ StudyRoom : owns
-    User ||--o{ RoomMember : has_membership
-    StudyRoom ||--o{ RoomMember : has_members
+    User ||--o{ RoomMember : participates
+    StudyRoom ||--o{ RoomMember : has_membership_periods
+
     StudyRoom ||--o{ RoomInvitation : has_invitations
-    User ||--o{ RoomInvitation : is_invited_user
-    User ||--o{ RoomInvitation : creates_invitation
-    StudyRoom ||--o{ RoomAccessCode : has_access_codes
-    User ||--o{ RoomAccessCode : creates_access_code
+    User ||--o{ RoomInvitation : receives
+    User ||--o{ RoomInvitation : creates
+
+    StudyRoom ||--o{ RoomAccessCode : has_codes
+    User ||--o{ RoomAccessCode : creates
+
+    StudyRoom ||--o{ RoomModeratorAssignment : has_moderator_assignments
+    User ||--o{ RoomModeratorAssignment : is_moderator
+    User ||--o{ RoomModeratorAssignment : assigns
+
+    StudyRoom ||--o{ OwnershipTransferRequest : has_transfer_requests
+    User ||--o{ OwnershipTransferRequest : requests_transfer
+    User ||--o{ OwnershipTransferRequest : is_transfer_target
 
     User {
         uuid id PK
-        string email UQ_candidate
-        string username UQ_candidate
-        string passwordHash
+        string email UQ_candidate "normalized; nullable after anonymization"
+        string username UQ_candidate "normalized; nullable after anonymization"
+        string passwordHash "nullable or removed after anonymization"
+        string accountStatus "ACTIVE, DEACTIVATED, ANONYMIZED"
         datetime createdAt
         datetime updatedAt
+        datetime deactivatedAt "optional"
+        datetime anonymizeAt "optional"
     }
 
     StudyRoom {
@@ -72,12 +167,12 @@ erDiagram
         uuid ownerId FK
         string name
         string description "optional"
-        string roomType "Scheduled or Persistent"
-        string visibility "Public or Private"
-        int capacity
-        datetime scheduledStartAt "nullable for Persistent"
-        datetime scheduledEndAt "nullable for Persistent"
-        string status "values depend on roomType"
+        string roomType "SCHEDULED or PERSISTENT"
+        string visibility "PUBLIC or PRIVATE"
+        int capacity "minimum 2"
+        datetime scheduledStartAt "required for SCHEDULED; null for PERSISTENT"
+        datetime scheduledEndAt "required for SCHEDULED; null for PERSISTENT"
+        string status
         datetime createdAt
         datetime updatedAt
     }
@@ -86,9 +181,8 @@ erDiagram
         uuid id PK
         uuid roomId FK
         uuid userId FK
-        string role
         datetime joinedAt
-        datetime leftAt "optional"
+        datetime leftAt "nullable; null means active"
     }
 
     RoomInvitation {
@@ -96,7 +190,7 @@ erDiagram
         uuid roomId FK
         uuid invitedUserId FK
         uuid invitedById FK
-        string status "values and transitions TBD"
+        string status "PENDING, ACCEPTED, REVOKED, EXPIRED"
         datetime expiresAt "optional"
         datetime createdAt
     }
@@ -110,43 +204,55 @@ erDiagram
         datetime revokedAt "nullable"
         datetime createdAt
     }
+
+    RoomModeratorAssignment {
+        uuid id PK
+        uuid roomId FK
+        uuid userId FK
+        uuid assignedById FK
+        string status "PENDING, ACTIVE, REVOKED, DECLINED, EXPIRED, CANCELLED"
+        datetime assignedAt
+        datetime expiresAt
+        datetime acceptedAt "optional"
+        datetime revokedAt "optional"
+    }
+
+    OwnershipTransferRequest {
+        uuid id PK
+        uuid roomId FK
+        uuid requestedById FK
+        uuid targetUserId FK
+        string status "proposed values; see entity description"
+        datetime createdAt
+        datetime expiresAt
+        datetime resolvedAt "optional"
+    }
 ```
 
-`ownerId` expresses room ownership. An OWNER `RoomMember` is also shown as a possible membership representation, but its agreement with `ownerId` is a cross-row invariant that needs an explicit write strategy (see below).
+Each request/assignment has one room and the named user references; a User or room may have zero or many historical rows. `StudyRoom.ownerId` identifies exactly one current owner per room. The `RoomMember` record represents a period of participation only; it does not duplicate Owner or Moderator role authority.
 
-The two user references on `RoomInvitation` have distinct meanings: `invitedUserId` identifies the intended recipient, while `invitedById` identifies the user who created the invitation. `RoomAccessCode.createdById` records which user created that room's reusable credential. These are conceptual relationships; they do not prescribe notification delivery or a specific invitation workflow.
+## 4. Room creation, types, and lifecycle
 
-## 6. Data integrity and concurrency
+`roomType` describes the room operating model. `status` describes its current lifecycle state. **Start Now** and **Schedule for Later** are user-facing creation modes, not room types; there is no `INSTANT` room type.
 
-- **Capacity:** `StudyRoom.capacity` (the maximum participant count) must be positive. A database `CHECK` constraint is a suitable defense in depth in addition to API validation.
-- **Scheduled time range:** Scheduled rooms require non-null start and end timestamps, with end later than start. Persistent rooms have null start and end timestamps under this current proposal. API validation should give useful errors, while database constraints should protect persisted data from invalid writes. The eventual schema should encode both the type/nullability rule and the time-order rule where practical.
-- **Membership history and active uniqueness:** Each membership period is a separate `RoomMember` row with its own UUID primary key. A plain unique constraint on `(roomId, userId)` would allow only one row for that pair for all time, so after a member leaves, it would prevent inserting another row on rejoin and would destroy the chosen period-by-period history model. Instead, enforce at most one active row for a pair with a PostgreSQL partial unique index on `(roomId, userId)` with predicate `leftAt IS NULL`. Historical rows with a non-null `leftAt` remain unrestricted by that index. Prisma 7 supports partial indexes behind the `partialIndexes` preview feature; this is a design note only, and the Prisma schema is not being changed here.
-- **Capacity under concurrent joins:** A naïve operation that counts current members and then inserts a membership is unsafe. Two requests can both observe one remaining place, both pass the check, and both insert, exceeding capacity. Joining must enforce capacity atomically. One strategy is a transaction that locks the room row (or another stable capacity record), counts eligible active memberships, and inserts only if capacity remains; all admission paths must use the same locking protocol. Another justified strategy could use an atomic seat counter with guarded updates and carefully maintained consistency. A transaction alone is not sufficient if concurrent transactions can perform the same unprotected count-and-insert sequence.
-- **Owner and OWNER membership consistency:** `StudyRoom.ownerId` and an OWNER role in `RoomMember` are two representations of ownership if both are stored. A normal foreign key can ensure that each reference points to an existing user/room, but it cannot by itself ensure that the room's `ownerId` equals the user in its OWNER membership, nor that exactly one such membership exists. Decide whether ownership is represented in one place or both. If both are retained, enforce consistency through a transactionally controlled creation/transfer path and consider database-level mechanisms or validation for defense in depth; document the invariant and test it.
-- **Delete behavior:** Referential actions (restrict, cascade, or soft deletion) are not settled here. They must be selected deliberately because deleting a user or room can affect membership history and auditability.
+| Creation mode | Initial `roomType` and `status` | Schedule fields | Behavior |
+| --- | --- | --- | --- |
+| **Start Now** | `PERSISTENT`, `ACTIVE` | Both `scheduledStartAt` and `scheduledEndAt` are null. | The Owner can enter immediately. Create a membership period only after successful admission. |
+| **Schedule for Later** | `SCHEDULED`, `SCHEDULED` | Both are required; `scheduledEndAt` must be later than `scheduledStartAt`. | At `scheduledStartAt`, the backend automatically changes status to `ACTIVE` and attempts Lobby admission under authorization and capacity rules. |
 
-## 7. Authorization and privacy
+`scheduledEndAt` is a planned end time, not an automatic shutdown. The room may remain active past that time, with an appropriate UI reminder. The Owner or a Moderator may end an active Scheduled session. The Owner disconnecting alone does not end it.
 
-Public/Private is a visibility setting, not a complete authorization model. Public means a room may be discoverable according to product rules; it does not automatically grant every operation. Private means the room should not be discoverable or joinable by an arbitrary caller. For the first version, private-room access is **Invitation OR Access Code**: either a valid invitation associated with that specific user and room, or a valid code for that room, is sufficient. A code is an independent alternative; a user with a valid code does not also need an individual invitation.
+### Scheduled Room lifecycle
 
-Access codes are reusable by multiple users until they expire or are revoked. An authorized owner may revoke a code; expiry is optional. A valid code still grants no guaranteed seat: every use must pass backend validation, room lifecycle checks, and capacity/admission checks. Join requests and their approval workflow are out of scope for v1. The backend validates the invitation or code when entering the Lobby and checks authorization again when actual admission is attempted. UI visibility is not security, and a Redis Lobby entry is not an authorization grant.
+```text
+SCHEDULED -> ACTIVE       (automatically at scheduledStartAt)
+SCHEDULED -> CANCELLED    (if cancelled before start)
+ACTIVE -> ENDED
+```
 
-The backend must enforce authorization on every relevant read and write, including room discovery, room details, Lobby entry, admission attempts, invitation management, and access-code management. For a Private Room, validate the invitation or access code server-side both when the user enters the Lobby and again when admission is attempted; a previous check or Redis queue entry is not an authorization grant. Hiding a room or button in the UI is not a security control because clients can call API endpoints directly.
+When a Scheduled Room becomes `ENDED` or `CANCELLED`, close its active membership periods by setting `leftAt` as part of the same transaction as the room status update.
 
-## 8. Confirmed room lifecycle
-
-`roomType` and `status` describe different concepts. `roomType` identifies the room's operating model—**Persistent** or **Scheduled**—while `status` describes where that room is in its lifecycle. Status values and transitions are therefore constrained by room type; `CLOSED` and `ARCHIVED` are Persistent Room states and are not part of the Scheduled Room lifecycle in v1.
-
-### Persistent Rooms
-
-| Current status | Allowed next status | Meaning |
-| --- | --- | --- |
-| `ACTIVE` | `CLOSED` | The room is available for use; the owner may temporarily close it. |
-| `CLOSED` | `ACTIVE` | The owner reopens the temporarily unavailable room. |
-| `CLOSED` | `ARCHIVED` | The room is archived as a terminal v1 state. |
-| `ARCHIVED` | None | No transitions out of `ARCHIVED` are allowed in v1. |
-
-Allowed transitions, stated explicitly:
+### Persistent Room lifecycle
 
 ```text
 ACTIVE -> CLOSED
@@ -154,46 +260,109 @@ CLOSED -> ACTIVE
 CLOSED -> ARCHIVED
 ```
 
-Archiving preserves the `StudyRoom` record and its `RoomMember` history. `ARCHIVED` is not a deletion operation and is not normally reopenable in v1.
+`ARCHIVED` is terminal in v1. Archiving preserves the room record and membership history. When a Persistent Room becomes `CLOSED` or `ARCHIVED`, close active membership periods transactionally. Reopening a Persistent Room requires fresh admission and creates new membership-period records; prior rows remain history.
 
-### Scheduled Rooms
+The Prisma schema now declares enums for `roomType`, `visibility`, `status`, and `accountStatus`. A PostgreSQL `CHECK` constraint is still required to ensure each status is valid for its room type: Persistent rooms may use `ACTIVE`, `CLOSED`, or `ARCHIVED`; Scheduled rooms may use `SCHEDULED`, `ACTIVE`, `ENDED`, or `CANCELLED`. Enum declarations alone do not enforce this compatibility. Database constraints protect stored type/status compatibility; backend logic must additionally authorize actors and validate transitions. A valid stored status pair alone does not make a transition valid. The backend needs a reliable mechanism for the scheduled transition at `scheduledStartAt`; scheduler/repair/reliability implementation is future work, not an existing feature.
 
-The Scheduled Room lifecycle remains:
+## 5. Membership, capacity, and administrator reservation
 
-```text
-SCHEDULED -> ACTIVE (automatically at startsAt) -> ENDED
-SCHEDULED -> CANCELLED
-```
+### Membership history
 
-`SCHEDULED -> CANCELLED` is allowed only when the owner cancels before the session starts. `ACTIVE -> ENDED` occurs when the session ends. `CLOSED` and `ARCHIVED` are not Scheduled Room statuses in v1. A reliable backend mechanism is required to perform the automatic transition at `startsAt`; the design does not imply that a scheduler or transition job exists. Reliability and recovery hardening for this mechanism is planned for the reliability work.
+Each successful admission creates a new `RoomMember` period. Leaving sets `leftAt`; rejoining creates another row. A Lobby entry, failed admission, or room creation by itself creates no membership row. This applies equally to the Owner and Moderators: their role authority comes from `StudyRoom.ownerId` and `RoomModeratorAssignment`, while their admitted occupancy is represented by an active `RoomMember` period.
 
-### Scheduled Room Lobby and admission
+Enforce at most one active membership per `(roomId, userId)` with a PostgreSQL partial unique index on those columns where `leftAt IS NULL`. A plain unique constraint on `(roomId, userId)` would block all later membership-period rows after the first one, incorrectly preventing a user from rejoining. Historical rows with non-null `leftAt` remain available. Prisma 7 supports partial indexes behind the `partialIndexes` preview feature; the schema is not being changed here.
 
-A user may request to join a Scheduled Room before `startsAt`. Until the room becomes `ACTIVE`, that user waits in the live Lobby and has no `RoomMember` row. When the room automatically transitions to `ACTIVE`, the backend attempts to admit waiting users in FIFO order. FIFO order provides priority, not a guaranteed seat: if capacity is full when an attempt is made, the user remains in the Lobby and may see: `Room is full. You can keep waiting or leave the lobby.` The user may leave voluntarily without creating a membership-period record.
+### Capacity and reserved administrator seat
 
-When a seat becomes available, the backend attempts admission for waiting users in FIFO order. Recheck current authorization and capacity at the time of each attempt. Create a `RoomMember` row only after successful admission to the active room. Lobby waiting, leaving, and failed admission do not create membership-period history. Admission and capacity enforcement must be concurrency-safe; PostgreSQL is authoritative for membership and capacity, and Redis queue state alone must never guarantee a seat. Coordinate the admission transaction/locking strategy with the capacity rule in the data-integrity section.
+`capacity` is the total maximum number of admitted people, including Owners and Moderators, and must be at least 2. Reserve one seat—not one seat per administrator—for an Owner or Moderator when no authorized administrator is currently present. Presence is the current in-room/connection state, distinct from an active moderator assignment or a membership period; transient presence belongs to Redis. While no administrator is present, an ordinary participant may not occupy the reserved final seat. An authorized Owner or Moderator may use it, subject to authorization, valid room lifecycle, and total capacity.
 
-Redis manages the live waiting order and transient connection/presence state. If a waiting user disconnects temporarily, retain their position only if they reconnect within the product-defined 30-second grace period; after expiry remove them, and a later rejoin goes to the queue tail. The v1 design does not guarantee restoring queue positions after Redis data loss or service restart, so affected users may need to rejoin.
+When the last authorized administrator leaves, reserve one seat again for future admission attempts. Do not eject participants already in the room; the reservation affects future admission decisions only. A room with `capacity = 1` could leave no seat for anyone but an administrator, so the confirmed `capacity >= 2` minimum supports one reserved administrative seat plus at least one other participant.
 
-### Enforcement
+Capacity must be checked and enforced atomically in PostgreSQL. Counting active members and then inserting without concurrency control can oversubscribe a room when concurrent requests observe the same free seat. Use a transaction and appropriate room/seat locking or another justified atomic strategy; apply the same admission protocol to all paths. Redis queue order alone never guarantees a seat. FIFO priority applies among ordinary waiting users subject to the administrative reservation and all other authorization/admission rules.
 
-The backend must authorize lifecycle changes according to the actor permissions and validate each state transition against the current `roomType` and `status`, including owner reopening of a Persistent Room and owner cancellation of a Scheduled Room before it starts. Reject transitions not listed above, including every transition out of `ARCHIVED`. UI controls alone do not enforce lifecycle rules; authorization and transition validation belong on the server. The eventual persistence design should also guard against invalid room-type/status combinations where practical. The `SCHEDULED -> ACTIVE` transition at `startsAt` requires a reliable backend mechanism; scheduler implementation, recovery behavior, and reliability hardening remain future work planned for the reliability work.
+## 6. Private Room access and authorization
 
-## 9. Out of scope for the initial schema
+For Private Rooms, admission policy is **Invitation OR Access Code**, not Invitation AND Code. An invitation is tied to one user and one room; a valid room code is an independent alternative and may authorize multiple users. Codes may expire and can be revoked. Join requests are out of scope for v1.
 
-The initial schema described here does not model:
+The backend checks private-room access server-side before Lobby entry and again when actual admission is attempted. Revalidate the relevant invitation or code, room lifecycle, current actor authorization, and capacity at admission time. A Redis queue entry or UI visibility is not an authorization grant.
 
-- Chat messages and message retention/order.
-- WebRTC sessions, signaling, or other transient session data.
-- Presence and ephemeral online/active state as PostgreSQL domain records (transient connection/presence state belongs in Redis under the confirmed storage decision).
-- AI/RAG source documents, chunks, embeddings, or retrieval metadata.
+### Confirmed permission model
 
-These concerns have different lifecycle, volume, and consistency requirements. Chat, WebRTC, and AI/RAG will be designed in their respective sprints once the related product and technical requirements are clear. Redis use for the live Lobby queue and transient connection/presence state is the confirmed exception described above; detailed keys, expiration behavior, and recovery implementation are still pending and are not defined here.
+| Operation | Owner | Moderator |
+| --- | --- | --- |
+| Appoint/remove Moderator | Yes | No |
+| End active Scheduled session | Yes | Yes |
+| Send/revoke invitations | Yes | Yes |
+| Create/revoke/regenerate access code | Yes | No |
+| Transfer ownership | Yes | No |
+| Close/archive Persistent Room | Yes | No |
 
-## 10. Next steps
+`StudyRoom.ownerId` determines Owner permissions; an active `RoomModeratorAssignment` determines Moderator permissions. Ordinary active participants have Member permissions. `RoomMember` is not the authority for roles.
 
-1. Resolve remaining product and implementation decisions, including invitation states/transitions, repeated invitations for one user-room pair, access-code uniqueness/indexing, deletion behavior, and how `StudyRoom.ownerId` relates to an OWNER membership.
-2. Finalize entity fields, relations, deletion policy, indexes, and database constraints based on those decisions.
-3. Update the Prisma schema to reflect the approved model and constraints.
-4. Validate the Prisma schema and review the generated migration before applying it.
-5. Create a migration, then test important invariants, including schedule validity, membership uniqueness/history behavior, authorization paths, and capacity under concurrent joins.
+## 7. Moderator assignment lifecycle
+
+The Owner appoints a Moderator, but authority begins only when the target accepts. A pending assignment expires after 7 days if unanswered; the Owner may cancel it. Reappointment creates a new historical row. At most one pending and at most one active assignment may exist for a `(roomId, userId)` pair, enforced with separate partial unique indexes. An active assignment persists when its user leaves the room. Deactivating that account revokes active assignments; reactivation during the grace period does not restore them.
+
+The schema enum declares `PENDING`, `ACTIVE`, `REVOKED`, `DECLINED`, `EXPIRED`, and `CANCELLED`. Acceptance moves a pending assignment to active; an Owner cancelling a pending request moves it to `CANCELLED`; removal or account deactivation revokes an active assignment; a recipient may decline; an unanswered request expires after 7 days. The application sets the required `expiresAt` to seven days after creation. Transition handling and expiry processing remain unimplemented design work.
+
+## 8. Ownership transfer lifecycle
+
+Only the current Owner can request transfer, and the target must explicitly accept. A request expires after 7 days if unanswered; the current Owner can cancel a pending request. At most one pending transfer request may exist per room. Accepting must atomically update `StudyRoom.ownerId` and resolve the request so there is no ambiguous owner. The former Owner loses Owner permissions, is not automatically made a Moderator, and remains an ordinary Member only if they already have an active membership. Revoke any active Moderator assignment held by the former Owner. The new Owner gains Owner permissions from `ownerId` whether or not they have joined.
+
+Proposed request states are `PENDING`, `ACCEPTED`, `REJECTED`, `CANCELLED`, and `EXPIRED`; exact schema encoding and transition implementation remain to be finalized. If a user selects transfer as part of account deletion, transfer must complete before deactivation. If they proceed without transfer, deletion continues under the account lifecycle below.
+
+## 9. Account deactivation, anonymization, and room effects
+
+Account deletion is a user-requested workflow, not automatic inactivity. On request, deactivate the account and start a 30-day grace period. While deactivated, block login and normal authenticated operations; invalidate sessions/tokens in the future implementation. The user may reactivate during the grace period, cancelling anonymization. If they do not, anonymize personal data while preserving `User.id` and historical referential integrity. Release the original email and username for new registration; a new registration gets a new ID and does not reactivate the old identity. Remove or replace identifying fields and obsolete credentials according to a future retention implementation plan.
+
+When deletion is requested, warn the Owner about rooms they own and offer optional ownership transfer first. If transfer completes, use the new Owner. If the user proceeds without transfer, cancel their not-yet-started Scheduled Rooms and close their Persistent Rooms; do not hard-delete rooms in v1. Retain room records and historical memberships, and invalidate invitations/access codes as appropriate for closed or archived rooms. End the deactivated user's active `RoomMember` periods and revoke active Moderator assignments. If the account is reactivated during the grace period, memberships and Moderator assignments do not return automatically; fresh admission and/or reassignment is required.
+
+## 10. Integrity, indexes, and transactions
+
+The following are required design invariants. The initial migration declares the partial unique indexes and PostgreSQL `CHECK` constraints, but they are not present in the database until that migration is applied. The `CHECK` constraints are not represented by the Prisma schema.
+
+- `capacity >= 2`.
+- Scheduled timestamps are both present and `scheduledEndAt > scheduledStartAt`; Persistent schedule fields are both null.
+- Room status is valid for its room type, enforced by a proposed PostgreSQL `CHECK` in addition to backend transition validation.
+- At most one active membership per `(roomId, userId)`, using a partial unique index where `leftAt IS NULL`.
+- At most one pending invitation per `(roomId, invitedUserId)`, using a partial unique index on that pair where `status = 'PENDING'`; repeated history remains allowed.
+- At most one unrevoked access code per room, using a partial unique index on `roomId` where `revokedAt IS NULL`. Regeneration atomically revokes old and creates new.
+- At most one pending and one active Moderator assignment per `(roomId, userId)`, using separate partial unique indexes on that pair where `status = 'PENDING'` and `status = 'ACTIVE'`, respectively.
+- At most one pending ownership transfer per room, using a partial unique index on `roomId` where `status = 'PENDING'`.
+- An expired pending invitation, Moderator assignment, or transfer request must be transitioned before reissue where a partial unique index requires it. Do not use time-dependent predicates such as `NOW()` in index definitions.
+- Admission and capacity checks are atomic; unprotected “count, then insert” is unsafe.
+- Room status changes that close active memberships happen transactionally.
+- Accepting ownership transfer atomically changes `ownerId` and request status.
+- A database foreign key alone cannot ensure a matching Owner membership, and Owner membership is deliberately not required until the Owner is admitted. Do not add a `RoomMember.role` field; ownership and Moderator authority remain separate.
+
+For normalized email and username, enforce uniqueness on normalized values. Exact normalization implementation and database index strategy remain to be finalized, though product normalization (trim and lowercase) is confirmed.
+
+## 11. Lobby and Redis boundary
+
+Do not add a PostgreSQL Lobby table. Redis manages the live waiting queue and transient connection/presence state; PostgreSQL remains authoritative for durable domain records and admission invariants.
+
+A user may request to join a Scheduled Room before its start. Validate access before placing them in the Lobby, then revalidate on admission. Lobby waiting is not membership. At automatic activation, attempt admission in FIFO order subject to authorization, current capacity, and the reserved administrator seat. If full, let the user keep waiting or leave and display a clear full-room message. FIFO gives priority, not a guaranteed seat. When a seat becomes available, attempt admission with concurrency-safe PostgreSQL enforcement.
+
+Allow a 30-second reconnection grace period to retain queue position after a temporary disconnect. This duration is this product's decision, not a claim about Zoom or Google Meet. After expiry remove the user; a later rejoin enters at the queue end. v1 does not guarantee restoring queue position after Redis loss or restart, so affected users may need to rejoin. Queue retry, stale-entry recovery, idempotency, and PostgreSQL/Redis coordination are implementation considerations, not completed features.
+
+## 12. Scope boundaries and unresolved implementation details
+
+Out of the initial schema scope:
+
+- Chat message persistence.
+- WebRTC session/signaling data.
+- Durable presence implementation (transient presence/connection state uses Redis).
+- AI/RAG documents, chunks, embeddings, and evaluation data.
+- Detailed notification delivery for invitations or access codes.
+
+Still to finalize at implementation/design review:
+
+- Exact email/username normalization implementation and database index strategy; trim-and-lowercase normalization itself is confirmed.
+- Exact invitation expiry duration.
+- Access-code entropy/generation, hash approach, rate limits, and final indexing details.
+- Exact background scheduling/repair mechanism and reliability/observability approach.
+- Applying the reviewed initial migration remains pending.
+- Data-retention details beyond the agreed deactivation/anonymization policy and room-history retention.
+- Notification/delivery implementation; this document does not imply one exists.
+
+The fields, partial indexes, and CHECK constraints are defined by the Prisma schema and reviewed initial migration, but are not database structures until the migration is applied. Transaction requirements and background processing remain design guidance pending implementation. No production feature is claimed to exist.

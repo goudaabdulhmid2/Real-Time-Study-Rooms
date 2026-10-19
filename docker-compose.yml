@@ -5,10 +5,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: study_user
-      POSTGRES_PASSWORD: local_dev_password
+      POSTGRES_PASSWORD: 123456789
       POSTGRES_DB: study_rooms
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

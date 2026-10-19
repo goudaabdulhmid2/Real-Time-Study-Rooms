@@ -1,13 +1,202 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider        = "prisma-client"
+  output          = "../generated/prisma"
+  previewFeatures = ["partialIndexes"]
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+enum AccountStatus {
+  ACTIVE
+  DEACTIVATED
+  ANONYMIZED
+}
+
+enum RoomType {
+  SCHEDULED
+  PERSISTENT
+}
+
+enum RoomVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum RoomStatus {
+  SCHEDULED
+  ACTIVE
+  ENDED
+  CANCELLED
+  CLOSED
+  ARCHIVED
+}
+
+enum RoomInvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+enum ModeratorAssignmentStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+  DECLINED
+  EXPIRED
+  CANCELLED
+}
+
+enum OwnershipTransferStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+model User {
+  id            String        @id @default(uuid()) @db.Uuid
+  email         String?       @unique
+  username      String?       @unique
+  passwordHash  String?
+  accountStatus AccountStatus @default(ACTIVE)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime      @updatedAt @db.Timestamptz(3)
+  deactivatedAt DateTime?     @db.Timestamptz(3)
+  anonymizeAt   DateTime?     @db.Timestamptz(3)
+
+  ownedRooms                  StudyRoom[]                @relation("RoomOwner")
+  memberships                 RoomMember[]               @relation("MembershipUser")
+  invitationsReceived         RoomInvitation[]           @relation("InvitationRecipient")
+  invitationsSent             RoomInvitation[]           @relation("InvitationInviter")
+  accessCodesCreated          RoomAccessCode[]           @relation("AccessCodeCreator")
+  moderatorAssignments        RoomModeratorAssignment[]  @relation("ModeratorUser")
+  moderatorAssignmentsCreated RoomModeratorAssignment[]  @relation("ModeratorAssigner")
+  ownershipTransfersRequested OwnershipTransferRequest[] @relation("TransferRequester")
+  ownershipTransfersTargeted  OwnershipTransferRequest[] @relation("TransferTarget")
+
+  @@index([accountStatus])
+}
+
+model StudyRoom {
+  id               String         @id @default(uuid()) @db.Uuid
+  ownerId          String         @db.Uuid
+  name             String
+  description      String?
+  roomType         RoomType
+  visibility       RoomVisibility
+  capacity         Int
+  scheduledStartAt DateTime?      @db.Timestamptz(3)
+  scheduledEndAt   DateTime?      @db.Timestamptz(3)
+  status           RoomStatus
+  createdAt        DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime       @updatedAt @db.Timestamptz(3)
+
+  owner                     User                       @relation("RoomOwner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  memberships               RoomMember[]
+  invitations               RoomInvitation[]
+  accessCodes               RoomAccessCode[]
+  moderatorAssignments      RoomModeratorAssignment[]
+  ownershipTransferRequests OwnershipTransferRequest[]
+
+  @@index([ownerId])
+  @@index([roomType, status])
+  @@index([visibility, status])
+  @@index([scheduledStartAt, status])
+}
+
+model RoomMember {
+  id       String    @id @default(uuid()) @db.Uuid
+  roomId   String    @db.Uuid
+  userId   String    @db.Uuid
+  joinedAt DateTime  @default(now()) @db.Timestamptz(3)
+  leftAt   DateTime? @db.Timestamptz(3)
+
+  room StudyRoom @relation(fields: [roomId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  user User      @relation("MembershipUser", fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([roomId, userId], where: { leftAt: null }, map: "room_member_one_active_per_user_room")
+  @@index([roomId, leftAt])
+  @@index([userId, leftAt, joinedAt])
+}
+
+model RoomInvitation {
+  id            String               @id @default(uuid()) @db.Uuid
+  roomId        String               @db.Uuid
+  invitedUserId String               @db.Uuid
+  invitedById   String               @db.Uuid
+  status        RoomInvitationStatus @default(PENDING)
+  expiresAt     DateTime?            @db.Timestamptz(3)
+  createdAt     DateTime             @default(now()) @db.Timestamptz(3)
+
+  room        StudyRoom @relation(fields: [roomId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  invitedUser User      @relation("InvitationRecipient", fields: [invitedUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  invitedBy   User      @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([roomId, invitedUserId], where: { status: "PENDING" }, map: "room_invitation_one_pending_per_recipient")
+  @@index([invitedUserId, status])
+  @@index([roomId, status, createdAt])
+}
+
+model RoomAccessCode {
+  id          String    @id @default(uuid()) @db.Uuid
+  roomId      String    @db.Uuid
+  createdById String    @db.Uuid
+  codeHash    String
+  expiresAt   DateTime? @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  room      StudyRoom @relation(fields: [roomId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdBy User      @relation("AccessCodeCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([roomId], where: { revokedAt: null }, map: "room_access_code_one_unrevoked_per_room")
+  @@index([codeHash])
+  @@index([roomId, expiresAt])
+}
+
+model RoomModeratorAssignment {
+  id           String                    @id @default(uuid()) @db.Uuid
+  roomId       String                    @db.Uuid
+  userId       String                    @db.Uuid
+  assignedById String                    @db.Uuid
+  status       ModeratorAssignmentStatus @default(PENDING)
+  assignedAt   DateTime                  @default(now()) @db.Timestamptz(3)
+  expiresAt    DateTime                  @db.Timestamptz(3)
+  acceptedAt   DateTime?                 @db.Timestamptz(3)
+  revokedAt    DateTime?                 @db.Timestamptz(3)
+
+  room       StudyRoom @relation(fields: [roomId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  user       User      @relation("ModeratorUser", fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  assignedBy User      @relation("ModeratorAssigner", fields: [assignedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([roomId, userId], where: { status: "PENDING" }, map: "moderator_assignment_one_pending_per_user_room")
+  @@unique([roomId, userId], where: { status: "ACTIVE" }, map: "moderator_assignment_one_active_per_user_room")
+  @@index([roomId, status, assignedAt])
+  @@index([userId, status])
+}
+
+model OwnershipTransferRequest {
+  id            String                  @id @default(uuid()) @db.Uuid
+  roomId        String                  @db.Uuid
+  requestedById String                  @db.Uuid
+  targetUserId  String                  @db.Uuid
+  status        OwnershipTransferStatus @default(PENDING)
+  createdAt     DateTime                @default(now()) @db.Timestamptz(3)
+  expiresAt     DateTime                @db.Timestamptz(3)
+  resolvedAt    DateTime?               @db.Timestamptz(3)
+
+  room        StudyRoom @relation(fields: [roomId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  requestedBy User      @relation("TransferRequester", fields: [requestedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  targetUser  User      @relation("TransferTarget", fields: [targetUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([roomId], where: { status: "PENDING" }, map: "ownership_transfer_one_pending_per_room")
+  @@index([requestedById, status])
+  @@index([targetUserId, status])
 }
