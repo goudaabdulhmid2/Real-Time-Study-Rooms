@@ -1,8 +1,8 @@
 # Proposed v1 Database Design
 
-**Status: Proposed v1 design — pending final review.** This document combines confirmed product decisions with proposed conceptual entities and implementation constraints. The Prisma schema declares the seven models and partial indexes. The initial migration has been created and reviewed but is not yet applied. Transactions, Redis keys, scheduler behavior, and APIs remain unimplemented unless stated otherwise.
+**Status: Proposed v1 design — pending final review.** This document combines confirmed product decisions with proposed conceptual entities and implementation constraints. The Prisma schema declares the seven models and partial indexes. The initial migration was created, reviewed, and applied successfully; post-migration verification confirmed the expected domain tables, partial unique indexes, and `StudyRoom` CHECK constraints. Transactions, Redis keys, scheduler behavior, and APIs remain unimplemented unless stated otherwise.
 
-The current Prisma schema at `apps/api/prisma/schema.prisma` declares the seven models described below and their partial unique indexes. The initial migration has been created and reviewed but is not applied, so the corresponding tables, indexes, and CHECK constraints do not yet exist in the database. The project stack is NestJS, Prisma 7.10.1, PostgreSQL 17 for local development, and Redis for the live Lobby queue. No application feature, background job, Redis key, or scheduler implementation is claimed here.
+The current Prisma schema at `apps/api/prisma/schema.prisma` declares the seven models described below and their partial unique indexes. The initial migration has been applied, and post-migration verification confirmed that the corresponding tables, indexes, and CHECK constraints exist in the database. The project stack is NestJS, Prisma 7.10.1, PostgreSQL 17 for local development, and Redis for the live Lobby queue. No application feature, background job, Redis key, or scheduler implementation is claimed here.
 
 ## 1. Design goals and storage choices
 
@@ -16,7 +16,7 @@ A hybrid PostgreSQL/Redis design means the systems can fail or disagree independ
 
 ## 2. Core conceptual entities
 
-The entities and fields below describe the conceptual model and are represented by model declarations in the Prisma schema. They are not yet applied database structures because the initial migration has not been applied. `PK` means primary key and `FK` means foreign key.
+The entities and fields below describe the conceptual model and are represented by model declarations in the Prisma schema. The initial migration has applied these structures to the database. `PK` means primary key and `FK` means foreign key.
 
 ### User
 
@@ -127,7 +127,7 @@ If a user chooses ownership transfer as part of account deletion, the transfer m
 
 ## 3. Conceptual ERD
 
-This Mermaid ERD is **conceptual and does not represent a migrated database**. The Prisma schema declares the seven models, their enums, relations, and partial unique indexes. The initial migration has been created and reviewed but is not applied. The ERD shows the entities, UUID primary keys, foreign keys, and relationship cardinalities. It intentionally does not include a Lobby entity: the live Lobby queue is held in Redis.
+This Mermaid ERD is **conceptual and does not represent the physical database schema**. The Prisma schema declares the seven models, their enums, relations, and partial unique indexes. The initial migration has been applied, and post-migration verification confirmed the expected structures. The ERD shows the entities, UUID primary keys, foreign keys, and relationship cardinalities. It intentionally does not include a Lobby entity: the live Lobby queue is held in Redis.
 
 ```mermaid
 erDiagram
@@ -319,7 +319,7 @@ When deletion is requested, warn the Owner about rooms they own and offer option
 
 ## 10. Integrity, indexes, and transactions
 
-The following are required design invariants. The initial migration declares the partial unique indexes and PostgreSQL `CHECK` constraints, but they are not present in the database until that migration is applied. The `CHECK` constraints are not represented by the Prisma schema.
+The following are required design invariants. The initial migration has been applied; post-migration verification confirmed the partial unique indexes and PostgreSQL `CHECK` constraints in the database. The `CHECK` constraints are not represented by the Prisma schema.
 
 - `capacity >= 2`.
 - Scheduled timestamps are both present and `scheduledEndAt > scheduledStartAt`; Persistent schedule fields are both null.
@@ -361,8 +361,7 @@ Still to finalize at implementation/design review:
 - Exact invitation expiry duration.
 - Access-code entropy/generation, hash approach, rate limits, and final indexing details.
 - Exact background scheduling/repair mechanism and reliability/observability approach.
-- Applying the reviewed initial migration remains pending.
 - Data-retention details beyond the agreed deactivation/anonymization policy and room-history retention.
 - Notification/delivery implementation; this document does not imply one exists.
 
-The fields, partial indexes, and CHECK constraints are defined by the Prisma schema and reviewed initial migration, but are not database structures until the migration is applied. Transaction requirements and background processing remain design guidance pending implementation. No production feature is claimed to exist.
+The fields, partial indexes, and CHECK constraints are defined by the Prisma schema and applied initial migration; post-migration verification confirmed their expected database structures. Transaction requirements and background processing remain design guidance pending implementation. No production feature is claimed to exist.
