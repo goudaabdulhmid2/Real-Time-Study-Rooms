@@ -8,6 +8,7 @@ import { AppService } from './app.service';
 import { envValidationSchema } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { UsersModule } from './users/users.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -18,6 +19,7 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
     }),
 
     DatabaseModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [
