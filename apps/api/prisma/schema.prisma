@@ -80,8 +80,38 @@ model User {
   moderatorAssignmentsCreated RoomModeratorAssignment[]  @relation("ModeratorAssigner")
   ownershipTransfersRequested OwnershipTransferRequest[] @relation("TransferRequester")
   ownershipTransfersTargeted  OwnershipTransferRequest[] @relation("TransferTarget")
+  sessions                    Session[]
 
   @@index([accountStatus])
+}
+
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  expiresAt  DateTime  @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  lastUsedAt DateTime? @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  refreshTokens SessionRefreshToken[]
+
+  @@index([userId, revokedAt, expiresAt])
+}
+
+model SessionRefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  sessionId  String    @db.Uuid
+  tokenHash  String    @unique
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt  DateTime  @db.Timestamptz(3)
+  consumedAt DateTime? @db.Timestamptz(3)
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  // At most one unconsumed refresh token per session.
+  @@unique([sessionId], where: { consumedAt: null }, map: "session_refresh_token_one_unconsumed_per_session")
+  @@index([sessionId, createdAt])
 }
 
 model StudyRoom {
