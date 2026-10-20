@@ -1,9 +1,12 @@
 import { envValidationSchema } from './env.validation';
 
 describe('envValidationSchema', () => {
-  const validEnvironment = {
-    DATABASE_URL: 'postgresql://user:password@localhost:5432/study_rooms',
-  };
+    const validEnvironment = {
+      DATABASE_URL:
+        'postgresql://user:password@localhost:5432/study_rooms',
+      JWT_ACCESS_SECRET:
+        'test-only-secret-0123456789-0123456789',
+    };
 
   it('should apply default values', () => {
     const { error, value } =

@@ -1,4 +1,4 @@
-import type { UserRecord } from '../../users/repositories/user.repository';
+import type { UserAccountStatus, UserRecord } from '../../users/repositories/user.repository';
 
 
 export interface CreateSessionInput {
@@ -45,6 +45,17 @@ export type RotateRefreshTokenResult =
   | {
       status: 'REUSED' | 'INVALID';
     };
+
+  export interface ActiveSessionContext {
+    id: string;
+    userId: string;
+    expiresAt: Date;
+    user: {
+      id: string;
+      accountStatus: UserAccountStatus;
+  };
+}
+
 export abstract class SessionRepository {
   abstract createWithRefreshToken(
     input: CreateSessionInput,
@@ -61,7 +72,13 @@ export abstract class SessionRepository {
   abstract revokeSessionForTokenReuse(
   sessionId: string,
   now: Date,
-): Promise<void>;
+  ): Promise<void>;
+
+  abstract findActiveSession(
+    sessionId: string,
+    userId: string,
+    now: Date,
+  ): Promise<ActiveSessionContext | null>;
 
 }
 

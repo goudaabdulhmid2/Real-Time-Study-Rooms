@@ -11,6 +11,7 @@ import { DatabaseModule } from './database/database.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import {GlobalResponseInterceptor} from './common/interceptors/global-response.interceptor';
 import { UsersModule } from './users/users.module';
+import { AuthModule } from './auth/auth.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -22,6 +23,7 @@ import { UsersModule } from './users/users.module';
 
     DatabaseModule,
     UsersModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [

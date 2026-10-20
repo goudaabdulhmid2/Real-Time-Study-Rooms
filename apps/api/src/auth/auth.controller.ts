@@ -1,6 +1,6 @@
-import { Controller, HttpCode, Post, HttpStatus, Body, Res } from "@nestjs/common";
+import { Controller, HttpCode, Post, HttpStatus, Body, Res, Req, UnauthorizedException, Get, UseGuards } from "@nestjs/common";
 import { ConfigService } from '@nestjs/config';
-import type { Response } from 'express';
+import type { Response,Request } from 'express';
 
 import { AuthService } from "./auth.service";
 import { UserProfile } from "src/users/users.service";
@@ -10,7 +10,12 @@ import {
   AUTH_COOKIE_PATH,
   REFRESH_TOKEN_COOKIE,
 } from './auth.constants';
+import { AuthUser } from "./interfaces/auth-user.interface";
+import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 
+interface AuthenticatedRequest extends Request {
+  user: AuthUser;
+}
 @Controller({
     path: 'auth',
     version: '1',
@@ -36,26 +41,104 @@ export class AuthController {
     ) {
     const result = await this.authService.login(dto);
 
-    response.cookie(
-        REFRESH_TOKEN_COOKIE,
-        result.refreshToken,
-        {
-        httpOnly: true,
-        secure:
-            this.configService.getOrThrow<string>(
-            'NODE_ENV',
-            ) === 'production',
-        sameSite: 'lax',
-        path: AUTH_COOKIE_PATH,
-        expires: result.refreshTokenExpiresAt,
-        },
-    );
+    this.setAuthCookies(response, result);
 
     return {
-        accessToken: result.accessToken,
-        tokenType: 'Bearer',
         user: result.user,
     };
+    }
+
+    @Post('refresh')
+    @HttpCode(HttpStatus.OK)
+    async refresh(
+        @Req() request: Request,
+        @Res({ passthrough: true }) response: Response,
+    ){
+        const presentedToken: unknown =
+            request.cookies?[REFRESH_TOKEN_COOKIE]: undefined;
+        
+        if(
+            typeof presentedToken !== 'string' ||
+            presentedToken.length === 0
+        ){
+            this.ClearAuthCookies(response);
+
+            throw new UnauthorizedException(
+                'Invalid or expired session'
+            )
+        }
+
+        try{
+            const result = 
+                await this.authService.refresh(presentedToken);
+
+                this.setAuthCookies(response, result);
+
+                return {
+                    user: result.user
+                }
+        }catch(error: unknown){
+            if(error instanceof UnauthorizedException){
+                this.ClearAuthCookies(response)
+            }
+
+            throw error;
+        }
+    }
+
+    @Get('me')
+    @UseGuards(JwtAuthGuard)
+    getMe(@Req() request: AuthenticatedRequest) {
+        return {
+            userId: request.user.userId,
+        };
+    }
+
+
+    private setAuthCookies(
+        response: Response,
+        result: {
+            accessToken: string;
+            refreshToken: string;
+            accessTokenExpiresAt: Date;
+            refreshTokenExpiresAt: Date;
+        }
+    ): void {
+        const secure = this.configService.get<string>('NODE_ENV') === 'production';
+
+        response.cookie('access_token', result.accessToken, {
+            httpOnly: true,
+            secure,
+            sameSite: 'lax',
+            path: '/api/v1',
+            expires: result.accessTokenExpiresAt,
+        });
+
+        response.cookie('refresh_token', result.refreshToken, {
+            httpOnly: true,
+            secure,
+            sameSite: 'lax',
+            path: AUTH_COOKIE_PATH,
+            expires: result.refreshTokenExpiresAt,
+        });
+    }
+
+    private ClearAuthCookies(response: Response): void {
+        const secure = this.configService.get<string>('NODE_ENV') === 'production';
+
+        response.clearCookie('access_token',{
+            httpOnly: true,
+            secure,
+            sameSite: 'lax',
+            path: '/api/v1',
+        });
+
+        response.clearCookie('refresh_token',{
+            httpOnly: true,
+            secure,
+            sameSite: 'lax',
+            path: AUTH_COOKIE_PATH,
+        });
     }
 
 }

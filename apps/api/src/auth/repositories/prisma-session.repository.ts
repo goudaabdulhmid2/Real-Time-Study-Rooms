@@ -1,5 +1,5 @@
-import { Injectable } from "@nestjs/common";''
-import { CreatedSession, CreateSessionInput, SessionRepository, RefreshTokenContext, RotateRefreshTokenInput, RotateRefreshTokenResult} from "./session.repository";
+import { Injectable } from "@nestjs/common";
+import { CreatedSession, CreateSessionInput, SessionRepository, RefreshTokenContext, RotateRefreshTokenInput, RotateRefreshTokenResult, ActiveSessionContext} from "./session.repository";
 import { PrismaService } from "src/database/prisma.service";
 
 
@@ -223,5 +223,52 @@ export class PrismaSessionRepository implements SessionRepository{
             revokedAt: now,
             },
         });
+    }
+
+    async findActiveSession(
+        sessionId: string,
+        userId: string,
+        now: Date,
+    ): Promise<ActiveSessionContext | null> {
+        const session = await this.prisma.session.findFirst({
+            where: {
+                id: sessionId,
+                userId,
+                revokedAt: null,
+                expiresAt: { gt: now },
+                
+                user:{
+                    is: {
+                        accountStatus: 'ACTIVE'
+                    }
+                }
+
+            },
+            select: {
+                id: true,
+                userId: true,
+                expiresAt: true,
+                user: {
+                    select: {
+                        id: true,
+                        accountStatus: true,
+                    }
+                }
+            }
+        });
+
+        if(!session){
+            return null;
+        }
+
+        return {
+            id: session.id,
+            userId: session.userId,
+            expiresAt: session.expiresAt,
+            user: {
+                id: session.user.id,
+                accountStatus: session.user.accountStatus,
+            }
+        }
     }
 }

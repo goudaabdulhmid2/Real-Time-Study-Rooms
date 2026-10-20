@@ -9,7 +9,7 @@ export class PasswordHasherService {
         });
     }
 
-    async verify(passwordHash: string, plaintextPassword: string): Promise<boolean> {
+    async verify(plaintextPassword: string, passwordHash: string): Promise<boolean> {
         return argon2.verify(passwordHash, plaintextPassword);
     }
 }

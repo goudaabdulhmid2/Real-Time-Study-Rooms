@@ -154,7 +154,7 @@ export class AuthService {
         if(
             currentToken.tokenExpiresAt <= now ||
             currentToken.sessionExpiresAt <= now ||
-            currentToken.sessionExpiresAt !== null ||
+            currentToken.sessionRevokedAt !== null ||
             currentToken.user.accountStatus !== 'ACTIVE'
         ){
             throw new UnauthorizedException(
@@ -267,7 +267,7 @@ export class AuthService {
 
     private calculateAccessTokenExpiresAt(now: Date): Date {
         const ttlSeconds = 
-            this.configService.getOrThrow<number>("JWT_ACCESS_TTL_SECONDS=900");
+            this.configService.getOrThrow<number>("JWT_ACCESS_TTL_SECONDS");
 
         return new Date(
             now.getTime() + ttlSeconds * 1000
