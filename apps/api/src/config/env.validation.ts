@@ -45,5 +45,14 @@ export const envValidationSchema = Joi.object({
         .min(1)
         .max(30)
         .default(7),
+
+    THROTTLE_TTL: Joi.number()
+        .integer()
+        .min(1)
+        .default(60_000),
+    THROTTLE_LIMIT: Joi.number()
+        .integer()
+        .min(1)
+        .default(100),
         
 })

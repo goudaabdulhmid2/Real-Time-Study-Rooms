@@ -12,6 +12,7 @@ import {
 } from './auth.constants';
 import { AuthUser } from "./interfaces/auth-user.interface";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
+import { Throttle } from "@nestjs/throttler";
 
 interface AuthenticatedRequest extends Request {
   user: AuthUser;
@@ -27,12 +28,14 @@ export class AuthController {
 
     ) {}
 
+    @Throttle({default:{limit: 5, ttl: 60_000}})
     @Post('register')
     @HttpCode(HttpStatus.CREATED)
     async register(@Body() dto: RegisterDto): Promise<UserProfile> {
         return this.authService.register(dto);
     }
 
+    @Throttle({default:{limit: 5, ttl: 60_000}})
     @Post('login')
     @HttpCode(HttpStatus.OK)
     async login(
@@ -48,6 +51,7 @@ export class AuthController {
     };
     }
 
+    @Throttle({default:{limit: 10, ttl: 60_000}})
     @Post('refresh')
     @HttpCode(HttpStatus.OK)
     async refresh(
