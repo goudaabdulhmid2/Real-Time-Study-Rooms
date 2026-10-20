@@ -11,6 +11,7 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import { GlobalResponseInterceptor } from './common/interceptors/global-response.interceptor';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
+import { OriginGuard } from './common/guards/origin.guard';
 
 @Module({
   imports: [
@@ -50,6 +51,10 @@ import { AuthModule } from './auth/auth.module';
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
     },
+    {
+      provide: APP_GUARD,
+      useClass: OriginGuard,
+    }
   ],
 })
 export class AppModule {}
