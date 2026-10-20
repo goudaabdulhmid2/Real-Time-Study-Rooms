@@ -51,14 +51,15 @@ export class AuthService {
             await this.usersService.findForAuthenticationByEmail(
             dto.email,
             );
-
-        const passwordMatches =
-            user?.passwordHash
-            ? await this.passwordHasher.verify(
+            
+        // Always perform an Argon2 verification, even when the account does not
+        // exist or has no password hash, to reduce timing differences that could
+        // help an attacker enumerate registered accounts.
+        const passwordMatches = 
+            await this.passwordHasher.verifyOrDummy(
                 dto.password,
-                user.passwordHash,
-                )
-            : false;
+                user?.passwordHash ?? null,
+            );
 
         if (
             !user ||

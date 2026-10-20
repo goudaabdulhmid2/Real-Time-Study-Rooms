@@ -11,7 +11,7 @@ export class LoginDto {
     typeof value === 'string' ? value.trim() : value,
   )
   @IsEmail()
-  @MaxLength(254)
+  @MaxLength(255)
   email!: string;
 
   @IsString()
