@@ -77,14 +77,11 @@ export class AuthService {
     const refreshTokenHash =
         this.refreshTokenService.hashToken(refreshToken);
 
-    const refreshTtlDays =
-        this.configService.getOrThrow<number>(
-        'REFRESH_TOKEN_TTL_DAYS',
-        );
-
-    const sessionExpiresAt = new Date(
-        Date.now() +
-        refreshTtlDays * 24 * 60 * 60 * 1000,
+    const now = new Date();
+    const sessionExpiresAt = this.calculateSessionExpiresAt(now);
+    const refreshTokenExpiresAt = this.calculateRefreshTokenExpiresAt(
+        now,
+        sessionExpiresAt,
     );
 
     const session =
@@ -92,7 +89,7 @@ export class AuthService {
         userId: user.id,
         sessionExpiresAt,
         refreshTokenHash,
-        refreshTokenExpiresAt: sessionExpiresAt,
+        refreshTokenExpiresAt,
         });
 
     const accessToken = await this.jwtService.signAsync({
@@ -104,6 +101,7 @@ export class AuthService {
         accessToken,
         refreshToken,
         sessionExpiresAt: session.expiresAt,
+        refreshTokenExpiresAt,
         user: {
         id: user.id,
         email: user.email,
@@ -112,5 +110,43 @@ export class AuthService {
         },
     };
 }
+
+    private calculateSessionExpiresAt(now: Date): Date {
+        const sessionMaxAgeDays =
+            this.configService.getOrThrow<number>(
+            'SESSION_MAX_AGE_DAYS',
+            );
+
+        const millisecondsPerDay = 24 * 60 * 60 * 1000;
+
+        return new Date(
+            now.getTime() +
+            sessionMaxAgeDays * millisecondsPerDay,
+        );
+    }
+
+    private calculateRefreshTokenExpiresAt(
+        now: Date,
+        sessionExpiresAt: Date,
+    ): Date {
+        const refreshTokenTtlDays =
+            this.configService.getOrThrow<number>(
+            'REFRESH_TOKEN_TTL_DAYS',
+            );
+
+        const millisecondsPerDay = 24 * 60 * 60 * 1000;
+
+        const refreshTokenExpiresAt = new Date(
+            now.getTime() +
+            refreshTokenTtlDays * millisecondsPerDay,
+        );
+
+        return new Date(
+            Math.min(
+            refreshTokenExpiresAt.getTime(),
+            sessionExpiresAt.getTime(),
+            ),
+        );
+    }
 
 }

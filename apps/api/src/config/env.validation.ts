@@ -31,10 +31,16 @@ export const envValidationSchema = Joi.object({
         .pattern(/^[1-9]\d*[smhd]$/)
         .default('15m'),
 
-    REFRESH_TOKEN_TTL_DAYS: Joi.number()
+    SESSION_MAX_AGE_DAYS: Joi.number()
         .integer()
         .min(1)
         .max(90)
         .default(30),
+
+    REFRESH_TOKEN_TTL_DAYS: Joi.number()
+        .integer()
+        .min(1)
+        .max(30)
+        .default(7),
         
 })

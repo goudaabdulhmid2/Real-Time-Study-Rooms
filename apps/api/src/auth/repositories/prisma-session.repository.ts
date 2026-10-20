@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";''
-import { CreatedSession, CreateSessionInput, SessionRepository } from "./session.repository";
+import { CreatedSession, CreateSessionInput, SessionRepository, RefreshTokenContext, RotateRefreshTokenInput, RotateRefreshTokenResult} from "./session.repository";
 import { PrismaService } from "src/database/prisma.service";
 
 
@@ -26,6 +26,181 @@ export class PrismaSessionRepository implements SessionRepository{
                 id: true,
                 expiresAt: true,
             }
+        });
+    }
+
+    async findRefreshTokenByHash(
+        tokenHash: string,
+    ): Promise<RefreshTokenContext | null> {
+        const token =
+            await this.prisma.sessionRefreshToken.findUnique({
+            where: { tokenHash },
+            include: {
+                session: {
+                include: {
+                    user: {
+                    select: {
+                        id: true,
+                        email: true,
+                        username: true,
+                        accountStatus: true,
+                    },
+                    },
+                },
+                },
+            },
+            });
+
+        if (!token) {
+            return null;
+        }
+
+        return {
+            id: token.id,
+            sessionId: token.sessionId,
+            tokenExpiresAt: token.expiresAt,
+            consumedAt: token.consumedAt,
+            sessionExpiresAt: token.session.expiresAt,
+            sessionRevokedAt: token.session.revokedAt,
+            user: token.session.user,
+        };
+        }
+
+    async rotateRefreshToken(
+        input: RotateRefreshTokenInput,
+    ): Promise<RotateRefreshTokenResult> {
+        return this.prisma.$transaction(async (tx) => {
+            const token =
+                await tx.sessionRefreshToken.findUnique({
+                    where: { tokenHash: input.currentTokenHash },
+                    include: {
+                    session: {
+                        include: {
+                        user: {
+                            select: {
+                            id: true,
+                            email: true,
+                            username: true,
+                            accountStatus: true,
+                            },
+                        },
+                        },
+                    },
+                    },
+                });
+
+            if (!token) {
+                return { status: 'INVALID' };
+            }
+
+            if (token.consumedAt !== null) {
+                await tx.session.updateMany({
+                    where: {
+                    id: token.sessionId,
+                    revokedAt: null,
+                    },
+                    data: {
+                    revokedAt: input.now,
+                    },
+                });
+
+                return { status: 'REUSED' };
+            }
+
+            if (
+                token.expiresAt <= input.now ||
+                token.session.expiresAt <= input.now ||
+                token.session.revokedAt !== null ||
+                token.session.user.accountStatus !== 'ACTIVE' ||
+                input.replacementExpiresAt <= input.now
+            ) {
+                return { status: 'INVALID' };
+            }
+
+            // Touch the active session. This also serializes
+            // concurrent rotations for the same session row.
+            const activeSession = await tx.session.updateMany({
+                where: {
+                    id: token.sessionId,
+                    revokedAt: null,
+                    expiresAt: { gt: input.now },
+                },
+                data: {
+                    lastUsedAt: input.now,
+                },
+            });
+
+            if (activeSession.count !== 1) {
+                return { status: 'INVALID' };
+            }
+
+            // Only one request can consume this token.
+            const consumed =
+                await tx.sessionRefreshToken.updateMany({
+                    where: {
+                    id: token.id,
+                    consumedAt: null,
+                    expiresAt: { gt: input.now },
+                    },
+                    data: {
+                        consumedAt: input.now,
+                    },
+                });
+
+            if (consumed.count !== 1) {
+                const latest =
+                    await tx.sessionRefreshToken.findUnique({
+                    where: { id: token.id },
+                    select: { consumedAt: true },
+                    });
+
+                if (latest?.consumedAt !== null &&
+                    latest?.consumedAt !== undefined) {
+                    await tx.session.updateMany({
+                    where: {
+                        id: token.sessionId,
+                        revokedAt: null,
+                    },
+                    data: {
+                        revokedAt: input.now,
+                    },
+                    });
+
+                    return { status: 'REUSED' };
+            }
+
+                return { status: 'INVALID' };
+            }
+
+            await tx.sessionRefreshToken.create({
+            data: {
+                sessionId: token.sessionId,
+                tokenHash: input.replacementTokenHash,
+                expiresAt: input.replacementExpiresAt,
+            },
+            });
+
+            return {
+            status: 'ROTATED',
+            sessionId: token.sessionId,
+            sessionExpiresAt: token.session.expiresAt,
+            user: token.session.user,
+            };
+        });
+    }
+
+    async revokeSessionForTokenReuse(
+        sessionId: string,
+        now: Date,
+    ): Promise<void> {
+        await this.prisma.session.updateMany({
+            where: {
+            id: sessionId,
+            revokedAt: null,
+            },
+            data: {
+            revokedAt: now,
+            },
         });
     }
 }

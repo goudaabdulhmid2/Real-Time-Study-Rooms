@@ -47,7 +47,7 @@ export class AuthController {
             ) === 'production',
         sameSite: 'lax',
         path: AUTH_COOKIE_PATH,
-        expires: result.sessionExpiresAt,
+        expires: result.refreshTokenExpiresAt,
         },
     );
 
