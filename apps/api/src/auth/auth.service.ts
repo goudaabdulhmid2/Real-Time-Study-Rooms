@@ -136,8 +136,16 @@ export class AuthService {
             )
         }
 
-        // Case 3: Detect reuse of a token already consumed by a previous rotation.
-        // Revoke the session before rejecting the request.
+        // Case 3: Expired tokens are invalid regardless of whether they were
+        // consumed. Expired-token retries must not revoke an active session.
+        if(currentToken.tokenExpiresAt <= now){
+            throw new UnauthorizedException(
+                'Invalid or expired session.'
+            )
+        }
+
+        // Case 4: Detect reuse of an unexpired token already consumed by a
+        // previous rotation. Revoke the session before rejecting the request.
         if(currentToken.consumedAt !== null){
             await this.sessionRepository.revokeSessionForTokenReuse(
                 currentToken.sessionId,
@@ -149,10 +157,9 @@ export class AuthService {
             )
         }
 
-        // Case 4: Reject expired tokens, expired/revoked sessions,
-        // and accounts that are no longer active.
+        // Case 5: Reject expired/revoked sessions and accounts that are no
+        // longer active.
         if(
-            currentToken.tokenExpiresAt <= now ||
             currentToken.sessionExpiresAt <= now ||
             currentToken.sessionRevokedAt !== null ||
             currentToken.user.accountStatus !== 'ACTIVE'

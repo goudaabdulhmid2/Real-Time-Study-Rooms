@@ -95,7 +95,13 @@ export class PrismaSessionRepository implements SessionRepository{
         return { status: 'INVALID' };
         }
 
-        // CASE 2: Detect reuse of a token consumed by an earlier rotation.
+        // CASE 2: Expired tokens are invalid regardless of whether they were
+        // consumed. They must not revoke a session after their expiry.
+        if (token.expiresAt <= input.now) {
+            return { status: 'INVALID' };
+        }
+
+        // CASE 3: Detect reuse of an unexpired token consumed by an earlier rotation.
         // Return normally so the session revocation commits; throwing here
         // would roll back the revocation inside this transaction.
         if (token.consumedAt !== null) {
@@ -112,10 +118,9 @@ export class PrismaSessionRepository implements SessionRepository{
             return { status: 'REUSED' };
         }
 
-        // CASE 3: Refuse rotation if the token, session, or account is invalid.
+        // CASE 4: Refuse rotation if the session or account is invalid.
         // Also enforce that the replacement token never outlives its session.
         if (
-            token.expiresAt <= input.now ||
             token.session.expiresAt <= input.now ||
             token.session.revokedAt !== null ||
             token.session.user.accountStatus !== 'ACTIVE' ||
@@ -162,14 +167,18 @@ export class PrismaSessionRepository implements SessionRepository{
             // may have consumed the token while this request was waiting.
             const latest = await tx.sessionRefreshToken.findUnique({
                 where: { id: token.id },
-                select: { consumedAt: true },
+                select: {
+                    consumedAt: true,
+                    expiresAt: true,
+                },
             });
 
         if (
             latest?.consumedAt !== null &&
-            latest?.consumedAt !== undefined
+            latest?.consumedAt !== undefined &&
+            latest.expiresAt > input.now
         ) {
-            // CASE 7: A competing request consumed this same token.
+            // CASE 7: A competing request consumed this same, unexpired token.
             // Revoke the session and return normally so revocation commits.
             await tx.session.updateMany({
             where: {
