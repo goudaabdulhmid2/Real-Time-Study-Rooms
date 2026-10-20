@@ -280,4 +280,20 @@ export class PrismaSessionRepository implements SessionRepository{
             }
         }
     }
+
+    async revokeSession(
+        userId: string,
+        sessionId: string,
+        now: Date,
+    ): Promise<void> {
+        await this.prisma.session.updateMany({
+            where: {
+                id: sessionId,
+                userId,
+            },
+            data: {
+                revokedAt: now,
+            }
+        })
+    }
 }

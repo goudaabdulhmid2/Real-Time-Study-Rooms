@@ -234,6 +234,19 @@ export class AuthService {
         
     }
 
+
+    async logout(
+        sessionId: string,
+        userId: string,
+    ): Promise<void> {
+        await this.sessionRepository.revokeSession(
+            sessionId,
+            userId,
+            new Date()
+        )
+    }
+
+
     private calculateSessionExpiresAt(now: Date): Date {
         const sessionMaxAgeDays =
             this.configService.getOrThrow<number>(

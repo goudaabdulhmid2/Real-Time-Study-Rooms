@@ -86,6 +86,25 @@ export class AuthController {
         }
     }
 
+    @Post('logout')
+    @HttpCode(HttpStatus.OK)
+    @UseGuards(JwtAuthGuard)
+    async logout(
+        @Req() request: AuthenticatedRequest,
+        @Res({ passthrough: true }) response: Response,
+    ) {
+        await this.authService.logout(
+            request.user.sessionId,
+            request.user.userId,
+        );
+
+        this.ClearAuthCookies(response);
+
+        return {
+            message: 'Logged out successfully',
+        }
+    }
+
     @Get('me')
     @UseGuards(JwtAuthGuard)
     getMe(@Req() request: AuthenticatedRequest) {

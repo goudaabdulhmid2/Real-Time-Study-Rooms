@@ -80,6 +80,11 @@ export abstract class SessionRepository {
     now: Date,
   ): Promise<ActiveSessionContext | null>;
 
+  abstract revokeSession(
+    sessionId: string,
+    userId: string,
+    now: Date,
+): Promise<void>;
 }
 
 
