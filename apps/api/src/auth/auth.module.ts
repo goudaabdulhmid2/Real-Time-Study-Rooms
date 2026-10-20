@@ -23,9 +23,9 @@ import { PrismaSessionRepository } from './repositories/prisma-session.repositor
           'JWT_ACCESS_SECRET',
         ),
         signOptions: {
-          expiresIn: configService.getOrThrow<string>(
-            'JWT_ACCESS_EXPIRES_IN',
-          ) as `${number}${'s' | 'm' | 'h' | 'd'}`,
+          expiresIn: configService.getOrThrow<number>(
+            'JWT_ACCESS_TTL_SECONDS=900',
+          ),
         },
       }),
     }),
