@@ -1,8 +1,8 @@
 # Proposed v1 Database Design
 
-**Status: Proposed v1 design — pending final review.** This document combines confirmed product decisions with proposed conceptual entities and implementation constraints. The Prisma schema declares the seven models and partial indexes. The initial migration was created, reviewed, and applied successfully; post-migration verification confirmed the expected domain tables, partial unique indexes, and `StudyRoom` CHECK constraints. Transactions, Redis keys, scheduler behavior, and APIs remain unimplemented unless stated otherwise.
+**Status: Proposed v1 design — pending final review.** This document combines confirmed product decisions with proposed conceptual entities and implementation constraints. The Prisma schema declares seven core-domain models plus the `Session` and `SessionRefreshToken` authentication models. The initial core-domain and session migrations were created, reviewed, and applied successfully; post-migration verification confirmed the expected domain structures and `StudyRoom` CHECK constraints. Authentication routes, PostgreSQL session persistence, Redis-backed rate limiting, and refresh transactions are implemented. Lobby queue/presence behavior and scheduled-room automation remain unimplemented.
 
-The current Prisma schema at `apps/api/prisma/schema.prisma` declares the seven models described below and their partial unique indexes. The initial migration has been applied, and post-migration verification confirmed that the corresponding tables, indexes, and CHECK constraints exist in the database. The project stack is NestJS, Prisma 7.10.1, PostgreSQL 17 for local development, and Redis for the live Lobby queue. No application feature, background job, Redis key, or scheduler implementation is claimed here.
+The current Prisma schema at `apps/api/prisma/schema.prisma` declares seven core-domain models, two authentication persistence models, their relations, and partial indexes. The initial migrations have been applied, and post-migration verification confirmed the corresponding tables, indexes, and `StudyRoom` CHECK constraints. The project stack is NestJS, Prisma 7.10.1, PostgreSQL 17 for local development, and Redis. Redis currently backs distributed API rate-limit counters; its use for the planned live Lobby queue and transient presence is not implemented. Authentication APIs and session transactions are implemented, while room-domain APIs, scheduled-room jobs, and Lobby processing remain future work.
 
 ## 1. Design goals and storage choices
 
@@ -10,13 +10,13 @@ The core domain is relational: users own rooms, people join rooms, invitations a
 
 MongoDB could represent this domain and may be suitable for other access patterns. It is not the default for this initial domain because its relationships and cross-record invariants are central to the design. This is a contextual choice, not a claim that SQL is universally superior to NoSQL.
 
-PostgreSQL is the source of truth for users, rooms, memberships, authorization-related domain data, and capacity enforcement. Redis stores the ephemeral live Lobby queue and transient connection/presence state. Queue state never reserves a seat: admission is decided against PostgreSQL with concurrency-safe capacity enforcement.
+PostgreSQL is the source of truth for users, rooms, memberships, authorization-related domain data, authentication sessions, and capacity enforcement. The approved architecture assigns Redis to the ephemeral live Lobby queue and transient connection/presence state; that Lobby use is not implemented. Redis is currently used for distributed request-rate counters. Queue state must never reserve a seat: admission is decided against PostgreSQL with concurrency-safe capacity enforcement.
 
-A hybrid PostgreSQL/Redis design means the systems can fail or disagree independently. The eventual implementation must account for retries, stale queue entries, idempotent admission, reconnection, and recovery without treating Redis state as authoritative. These are design considerations, not completed features.
+The planned Lobby-specific PostgreSQL/Redis design means those systems can fail or disagree independently. Its eventual implementation must account for retries, stale queue entries, idempotent admission, reconnection, and recovery without treating Redis queue state as authoritative. These are design considerations, not completed features; the current Redis integration is for request-rate counters.
 
 ## 2. Core conceptual entities
 
-The entities and fields below describe the conceptual model and are represented by model declarations in the Prisma schema. The initial migration has applied these structures to the database. `PK` means primary key and `FK` means foreign key.
+The entities and fields below describe the conceptual core-domain model and are represented by model declarations in the Prisma schema. The initial core-domain migration has applied these structures to the database. Authentication persistence is described in the backend architecture documentation and is intentionally outside this conceptual model. `PK` means primary key and `FK` means foreign key.
 
 ### User
 
@@ -127,7 +127,7 @@ If a user chooses ownership transfer as part of account deletion, the transfer m
 
 ## 3. Conceptual ERD
 
-This Mermaid ERD is **conceptual and does not represent the physical database schema**. The Prisma schema declares the seven models, their enums, relations, and partial unique indexes. The initial migration has been applied, and post-migration verification confirmed the expected structures. The ERD shows the entities, UUID primary keys, foreign keys, and relationship cardinalities. It intentionally does not include a Lobby entity: the live Lobby queue is held in Redis.
+This Mermaid ERD is **conceptual and does not represent the complete physical database schema**. The Prisma schema declares the seven core-domain models plus two authentication persistence models. The initial migrations have been applied, and post-migration verification confirmed the expected structures. This ERD shows only the core-domain entities, UUID primary keys, foreign keys, and relationship cardinalities; it omits `Session` and `SessionRefreshToken`. It intentionally does not include a Lobby entity: Lobby queue behavior is planned for Redis but is not implemented.
 
 ```mermaid
 erDiagram
@@ -262,7 +262,7 @@ CLOSED -> ARCHIVED
 
 `ARCHIVED` is terminal in v1. Archiving preserves the room record and membership history. When a Persistent Room becomes `CLOSED` or `ARCHIVED`, close active membership periods transactionally. Reopening a Persistent Room requires fresh admission and creates new membership-period records; prior rows remain history.
 
-The Prisma schema now declares enums for `roomType`, `visibility`, `status`, and `accountStatus`. A PostgreSQL `CHECK` constraint is still required to ensure each status is valid for its room type: Persistent rooms may use `ACTIVE`, `CLOSED`, or `ARCHIVED`; Scheduled rooms may use `SCHEDULED`, `ACTIVE`, `ENDED`, or `CANCELLED`. Enum declarations alone do not enforce this compatibility. Database constraints protect stored type/status compatibility; backend logic must additionally authorize actors and validate transitions. A valid stored status pair alone does not make a transition valid. The backend needs a reliable mechanism for the scheduled transition at `scheduledStartAt`; scheduler/repair/reliability implementation is future work, not an existing feature.
+The Prisma schema declares enums for `roomType`, `visibility`, `status`, and `accountStatus`. The applied initial migration adds PostgreSQL `CHECK` constraints for capacity, scheduled/persistent timestamp rules, and room-type/status compatibility: Persistent rooms may use `ACTIVE`, `CLOSED`, or `ARCHIVED`; Scheduled rooms may use `SCHEDULED`, `ACTIVE`, `ENDED`, or `CANCELLED`. These CHECK constraints are present in migration SQL but are not represented in the Prisma schema, so schema changes must preserve them deliberately. Enum declarations alone do not enforce compatibility. Backend logic must additionally authorize actors and validate transitions; a valid stored status pair alone does not make a transition valid. A reliable mechanism for the scheduled transition at `scheduledStartAt` is still future work.
 
 ## 5. Membership, capacity, and administrator reservation
 
@@ -270,7 +270,7 @@ The Prisma schema now declares enums for `roomType`, `visibility`, `status`, and
 
 Each successful admission creates a new `RoomMember` period. Leaving sets `leftAt`; rejoining creates another row. A Lobby entry, failed admission, or room creation by itself creates no membership row. This applies equally to the Owner and Moderators: their role authority comes from `StudyRoom.ownerId` and `RoomModeratorAssignment`, while their admitted occupancy is represented by an active `RoomMember` period.
 
-Enforce at most one active membership per `(roomId, userId)` with a PostgreSQL partial unique index on those columns where `leftAt IS NULL`. A plain unique constraint on `(roomId, userId)` would block all later membership-period rows after the first one, incorrectly preventing a user from rejoining. Historical rows with non-null `leftAt` remain available. Prisma 7 supports partial indexes behind the `partialIndexes` preview feature; the schema is not being changed here.
+Enforce at most one active membership per `(roomId, userId)` with a PostgreSQL partial unique index on those columns where `leftAt IS NULL`. A plain unique constraint on `(roomId, userId)` would block all later membership-period rows after the first one, incorrectly preventing a user from rejoining. Historical rows with non-null `leftAt` remain available. This partial index is declared in the current Prisma schema using the `partialIndexes` preview feature and exists in the applied initial migration.
 
 ### Capacity and reserved administrator seat
 
@@ -335,11 +335,11 @@ The following are required design invariants. The initial migration has been app
 - Accepting ownership transfer atomically changes `ownerId` and request status.
 - A database foreign key alone cannot ensure a matching Owner membership, and Owner membership is deliberately not required until the Owner is admitted. Do not add a `RoomMember.role` field; ownership and Moderator authority remain separate.
 
-For normalized email and username, enforce uniqueness on normalized values. Exact normalization implementation and database index strategy remain to be finalized, though product normalization (trim and lowercase) is confirmed.
+The application normalizes email and username by trimming and lowercasing before lookup and creation. PostgreSQL unique indexes enforce uniqueness for the stored values, including nullable identity fields. Those indexes do not themselves normalize direct database writes, so any future write path must follow the same normalization rule.
 
 ## 11. Lobby and Redis boundary
 
-Do not add a PostgreSQL Lobby table. Redis manages the live waiting queue and transient connection/presence state; PostgreSQL remains authoritative for durable domain records and admission invariants.
+Do not add a PostgreSQL Lobby table. The approved architecture assigns Redis to the live waiting queue and transient connection/presence state; this Lobby behavior is not implemented. PostgreSQL remains authoritative for durable domain records and admission invariants. The current API uses Redis for distributed request-rate counters.
 
 A user may request to join a Scheduled Room before its start. Validate access before placing them in the Lobby, then revalidate on admission. Lobby waiting is not membership. At automatic activation, attempt admission in FIFO order subject to authorization, current capacity, and the reserved administrator seat. If full, let the user keep waiting or leave and display a clear full-room message. FIFO gives priority, not a guaranteed seat. When a seat becomes available, attempt admission with concurrency-safe PostgreSQL enforcement.
 
@@ -351,17 +351,16 @@ Out of the initial schema scope:
 
 - Chat message persistence.
 - WebRTC session/signaling data.
-- Durable presence implementation (transient presence/connection state uses Redis).
+- Lobby queue and transient presence implementation (Redis is selected for this future behavior; current Redis usage is distributed request-rate counters).
 - AI/RAG documents, chunks, embeddings, and evaluation data.
 - Detailed notification delivery for invitations or access codes.
 
 Still to finalize at implementation/design review:
 
-- Exact email/username normalization implementation and database index strategy; trim-and-lowercase normalization itself is confirmed.
 - Exact invitation expiry duration.
 - Access-code entropy/generation, hash approach, rate limits, and final indexing details.
 - Exact background scheduling/repair mechanism and reliability/observability approach.
 - Data-retention details beyond the agreed deactivation/anonymization policy and room-history retention.
 - Notification/delivery implementation; this document does not imply one exists.
 
-The fields, partial indexes, and CHECK constraints are defined by the Prisma schema and applied initial migration; post-migration verification confirmed their expected database structures. Transaction requirements and background processing remain design guidance pending implementation. No production feature is claimed to exist.
+The fields and partial indexes are declared by the Prisma schema and applied initial migrations; PostgreSQL CHECK constraints are installed by migration SQL and are not represented in Prisma. Post-migration verification confirmed the expected database structures. Authentication APIs, session persistence, and Redis-backed rate limiting now exist in the backend; domain transaction requirements, Lobby processing, and background scheduling remain design guidance pending implementation. This design document makes no claim of production readiness.
