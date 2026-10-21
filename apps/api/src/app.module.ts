@@ -25,6 +25,7 @@ import { OriginGuard } from './common/guards/origin.guard';
     }),
 
     RedisModule.forRootAsync({
+      isGlobal: true,
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
@@ -35,8 +36,8 @@ import { OriginGuard } from './common/guards/origin.guard';
     }),
 
     ThrottlerModule.forRootAsync({ 
-      imports: [ConfigModule, RedisModule],
-      inject: [ConfigService, RedisToken],
+      imports: [ConfigModule],
+      inject: [ConfigService, RedisToken()],
       useFactory: (
         configService: ConfigService,
         redis: RedisClientType
