@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config'; 
 import { APP_FILTER, APP_INTERCEPTOR, APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler'; 
+import {RedisModule,  RedisToken} from '@nestjs-redis/client';
+import { RedisThrottlerStorage } from '@nestjs-redis/throttler-storage';
+import type { RedisClientType } from 'redis';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -20,16 +23,31 @@ import { OriginGuard } from './common/guards/origin.guard';
       envFilePath: '.env',
       validationSchema: envValidationSchema,
     }),
-    ThrottlerModule.forRootAsync({ 
+
+    RedisModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
+        options: {
+          url: configService.getOrThrow<string>('REDIS_URL'),
+        },
+      }),
+    }),
+
+    ThrottlerModule.forRootAsync({ 
+      imports: [ConfigModule, RedisModule],
+      inject: [ConfigService, RedisToken],
+      useFactory: (
+        configService: ConfigService,
+        redis: RedisClientType
+      ) => ({
         throttlers: [
           {
             ttl: configService.getOrThrow<number>('THROTTLE_TTL'),
             limit: configService.getOrThrow<number>('THROTTLE_LIMIT'),
           }
         ],
+        storage: new RedisThrottlerStorage(redis),
       }),
     }),
     DatabaseModule,
@@ -49,12 +67,12 @@ import { OriginGuard } from './common/guards/origin.guard';
     },
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: OriginGuard,
     },
     {
       provide: APP_GUARD,
-      useClass: OriginGuard,
-    }
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}
