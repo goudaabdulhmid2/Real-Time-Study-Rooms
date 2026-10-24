@@ -11,25 +11,32 @@ export type LoginRequest = {
   password: string;
 };
 
-export type RegisterUser = {
+export type RegisteredUser = {
     id: string;
     email: string | null;
     username: string | null;
 }
 
+export type CurrentUser = {
+  userId: string;
+};
 
 export const authApi = {
-    register(input: RegisterRequest): Promise<RegisterUser> {
-        return apiRequest<RegisterUser>('/auth/register', {
+    register(input: RegisterRequest): Promise<RegisteredUser> {
+        return apiRequest<RegisteredUser>('/auth/register', {
             method: 'POST',
             data: input,
         })
     },
 
-    login(input: LoginRequest): Promise<RegisterUser> {
-        return apiRequest<RegisterUser>('/auth/login', {
+    login(input: LoginRequest): Promise<RegisteredUser> {
+        return apiRequest<RegisteredUser>('/auth/login', {
             method: 'POST',
             data: input,
         })
+    },
+
+    me(): Promise<CurrentUser> {
+        return apiRequest<CurrentUser>('/auth/me')
     }
 }

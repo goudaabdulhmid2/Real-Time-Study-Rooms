@@ -1,0 +1,91 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from 'react';
+
+import {
+  ApiRequestError,
+} from '../../../lib/api-client';
+
+import {
+  authApi,
+  type CurrentUser,
+  type RegisteredUser,
+} from '../api/auth-api';
+
+type AuthStatus =
+  | 'loading'
+  | 'authenticated'
+  | 'unauthenticated'
+  | 'error';
+
+type AuthContextValue = {
+  user: CurrentUser | null;
+  status: AuthStatus;
+  refreshSession: () => Promise<CurrentUser | null>;
+};
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+type AuthProviderProps = {
+  children: ReactNode;
+};
+
+export function AuthProvider({ children }: AuthProviderProps) {
+  const [user, setUser] = useState<CurrentUser | null>(null);
+  const [status, setStatus] = useState<AuthStatus>('loading');
+
+  const refreshSession = useCallback(async () => {
+    setStatus('loading');
+
+    try {
+      const currentUser = await authApi.me();
+
+      setUser(currentUser);
+      setStatus('authenticated');
+
+      return currentUser;
+    } catch (error: unknown) {
+      setUser(null);
+
+      if (
+        error instanceof ApiRequestError &&
+        error.statusCode === 401
+      ) {
+        setStatus('unauthenticated');
+      } else {
+        setStatus('error');
+      }
+
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSession();
+  }, [refreshSession]);
+
+  return (
+    <AuthContext.Provider
+      value={{ user, status, refreshSession }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext);
+
+  if (context === null) {
+    throw new Error(
+      'useAuth must be used inside an AuthProvider.',
+    );
+  }
+
+  return context;
+}

@@ -13,6 +13,7 @@ import {
   type LoginFormInput,
   type LoginFormValues,
 } from '../schemas/login.schema';
+import { useAuth } from '../context/AuthContext';
 
 export function LoginPage() {
   const [statusMessage, setStatusMessage] = useState('');
@@ -35,6 +36,8 @@ export function LoginPage() {
     },
   });
 
+  const { refreshSession } = useAuth();
+
   const onValid = async (values: LoginFormValues) => {
     setStatusMessage('');
     setStatusType(null);
@@ -45,10 +48,17 @@ export function LoginPage() {
         password: values.password,
       });
 
-      setStatusType('success');
-      setStatusMessage(
-        'Signed in successfully. Your session is ready to be checked.',
-      );
+      const user = await refreshSession();
+        if (!user) {
+            setStatusType('error');
+            setStatusMessage(
+                'Login succeeded, but we could not load your session. Please try again.',
+            );
+            return;
+        }
+
+        setStatusType('success');
+        setStatusMessage(`Welcome back, ${user.username ?? user.email ?? 'user'}!`);
     } catch (error: unknown) {
       if (error instanceof ApiRequestError) {
         let hasFieldError = false;
