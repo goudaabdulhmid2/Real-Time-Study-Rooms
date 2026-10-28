@@ -1,9 +1,12 @@
 import axios, { type AxiosRequestConfig } from 'axios';
 
+// Base URL shared by all API requests.
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
   'http://localhost:3000/api/v1';
 
+// Main client used for normal API requests.
+// Its response interceptor handles eligible 401 responses.
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
@@ -12,17 +15,112 @@ export const apiClient = axios.create({
   },
 });
 
+// Separate client used only for refreshing the access token.
+// It does not use apiClient's response interceptor.
+const refreshClient = axios.create({
+  baseURL: API_BASE_URL,
+  withCredentials: true,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Holds the currently running refresh operation.
+// Concurrent requests share this Promise instead of starting new refreshes.
+let refreshPromise: Promise<void> | null = null;
+
+// Refreshes the access token once and shares the same operation
+// with other requests that need to refresh at the same time.
+function refreshAccessToken(): Promise<void> {
+  if (!refreshPromise) {
+    refreshPromise = refreshClient
+      .post('/auth/refresh')
+      .then(() => undefined)
+      .finally(() => {
+        // Allow a future refresh after this operation finishes or fails.
+        refreshPromise = null;
+      });
+  }
+
+  return refreshPromise;
+}
+
+// Adds a flag to Axios request configuration to prevent retry loops.
+type RetryRequestConfig = AxiosRequestConfig & {
+  _retry?: boolean;
+};
+
+// Requests to these endpoints must not trigger automatic token refresh.
+const excludedAuthPaths = [
+  '/auth/login',
+  '/auth/register',
+  '/auth/refresh',
+  '/auth/logout',
+];
+
+// Intercepts responses from apiClient.
+// Successful responses pass through unchanged.
+// Eligible 401 errors trigger one shared refresh, then retry the original request.
+apiClient.interceptors.response.use(
+  // Pass successful responses to the original caller.
+  (response) => response,
+
+  // Handle rejected HTTP requests, including 401 responses.
+  async (error: unknown) => {
+    // Only handle errors created by Axios.
+    if (!axios.isAxiosError(error)) {
+      throw error;
+    }
+
+    // Keep the original request so we can retry it after refreshing.
+    const originalRequest =
+      error.config as RetryRequestConfig | undefined;
+
+    const requestUrl = originalRequest?.url;
+
+    // Decide whether this error should bypass automatic refresh.
+    const shouldSkipRefresh =
+      error.response?.status !== 401 ||
+      !originalRequest ||
+      !requestUrl ||
+      originalRequest._retry === true ||
+      excludedAuthPaths.some((path) =>
+        requestUrl.includes(path),
+      );
+
+    // Pass through non-401 errors, excluded endpoints,
+    // missing request configurations, and already-retried requests.
+    if (shouldSkipRefresh) {
+      throw error;
+    }
+
+    // Mark the request so it cannot be retried more than once.
+    originalRequest._retry = true;
+
+    // Wait for the shared refresh operation.
+    // If refresh fails, this throws and the original request is not retried.
+    await refreshAccessToken();
+
+    // Retry the original request after refresh succeeds.
+    return apiClient.request(originalRequest);
+  },
+);
+
+// Describes the successful response format returned by our backend.
 type ApiSuccessEnvelope<T> = {
   success: true;
   data: T;
 };
 
+// Maps field names to their validation error messages.
 type FieldErrors = Record<string, string>;
 
+// Represents a normalized API error for use by the UI.
 export class ApiRequestError extends Error {
   public readonly statusCode?: number;
   public readonly fieldErrors: FieldErrors;
 
+  // Creates an API error with a message, optional HTTP status, and field errors.
   constructor(
     message: string,
     statusCode?: number,
@@ -35,6 +133,8 @@ export class ApiRequestError extends Error {
   }
 }
 
+// Checks whether an unknown value is a non-null, non-array object.
+// This lets TypeScript safely narrow the value before reading its properties.
 function isRecord(
   value: unknown,
 ): value is Record<string, unknown> {
@@ -45,6 +145,8 @@ function isRecord(
   );
 }
 
+// Extracts a useful error message from a backend payload,
+// or returns a fallback when the payload has no usable message.
 function getErrorMessage(
   payload: unknown,
   fallback: string,
@@ -72,6 +174,7 @@ function getErrorMessage(
   return fallback;
 }
 
+// Extracts validation errors returned as { field, message } objects.
 function getFieldErrors(payload: unknown): FieldErrors {
   if (!isRecord(payload) || !Array.isArray(payload.errors)) {
     return {};
@@ -92,6 +195,8 @@ function getFieldErrors(payload: unknown): FieldErrors {
   return fieldErrors;
 }
 
+// Sends an API request, unwraps the backend's success envelope,
+// and converts Axios failures into ApiRequestError for the UI.
 export async function apiRequest<T>(
   url: string,
   config: AxiosRequestConfig = {},
