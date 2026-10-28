@@ -55,7 +55,6 @@ const excludedAuthPaths = [
   '/auth/login',
   '/auth/register',
   '/auth/refresh',
-  '/auth/logout',
 ];
 
 // Intercepts responses from apiClient.
