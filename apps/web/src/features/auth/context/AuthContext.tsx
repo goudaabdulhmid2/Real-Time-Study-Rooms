@@ -14,7 +14,6 @@ import {
 import {
   authApi,
   type CurrentUser,
-  type RegisteredUser,
 } from '../api/auth-api';
 
 type AuthStatus =

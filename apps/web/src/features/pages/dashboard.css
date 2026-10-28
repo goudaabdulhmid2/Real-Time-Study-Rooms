@@ -1,0 +1,51 @@
+.dashboard-page {
+  min-height: 100vh;
+  padding: clamp(24px, 6vw, 80px);
+  background: var(--color-canvas);
+  color: var(--color-navy);
+}
+
+.dashboard-shell {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.dashboard-eyebrow {
+  margin: 0 0 24px;
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.dashboard-shell h1 {
+  margin: 0 0 16px;
+  font-size: clamp(32px, 5vw, 48px);
+  line-height: 1.15;
+}
+
+.dashboard-shell > p:not(.dashboard-eyebrow) {
+  color: var(--color-muted);
+  line-height: 1.7;
+}
+
+.dashboard-user {
+  display: grid;
+  gap: 8px;
+  margin-top: 32px;
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.dashboard-user span {
+  color: var(--color-muted);
+  font-size: 14px;
+}
+
+.dashboard-user code {
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}

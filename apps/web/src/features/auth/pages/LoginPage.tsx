@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 
 import { ApiRequestError } from '../../../lib/api-client';
 import { authApi } from '../api/auth-api';
@@ -36,6 +36,7 @@ export function LoginPage() {
     },
   });
 
+  const navigate = useNavigate();
   const { refreshSession } = useAuth();
 
   const onValid = async (values: LoginFormValues) => {
@@ -57,8 +58,9 @@ export function LoginPage() {
             return;
         }
 
-        setStatusType('success');
-        setStatusMessage(`Welcome back, ${user.username ?? user.email ?? 'user'}!`);
+        // setStatusType('success');
+        // setStatusMessage('Signed in successfully.');
+      navigate('/dashboard', { replace: true });
     } catch (error: unknown) {
       if (error instanceof ApiRequestError) {
         let hasFieldError = false;

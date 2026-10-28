@@ -6,6 +6,8 @@ import {
 
 import {LoginPage}  from './features/auth/pages/LoginPage';
 import {RegisterPage}  from './features/auth/pages/RegisterPage';
+import { ProtectedRoute } from './features/auth/components/ProtectedRoute';
+import { DashboardPage } from './features/pages/DashboardPage';
 
 function App() {
   return (
@@ -24,6 +26,13 @@ function App() {
         path="/register"
         element={<RegisterPage />}
       />
+
+      <Route element={<ProtectedRoute/>}>
+        <Route
+          path="/dashboard"
+          element={<DashboardPage />}
+        />
+      </Route>
 
       <Route
         path="*"
