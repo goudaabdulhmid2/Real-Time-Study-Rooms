@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useState,
+  useRef,
   type ReactNode,
 } from 'react';
 
@@ -39,17 +40,34 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
 
+  // save the current session check generation in a ref so that it persists across renders
+  const sessionCheckGenration = useRef(0);
+
   const refreshSession = useCallback(async () => {
+    // Assign a unique generation to this session check.
+    const requestGeneration = ++sessionCheckGenration.current;
+
     setStatus('loading');
 
     try {
       const currentUser = await authApi.me();
+
+      // Ignore the result if a newer session check has started.
+      if(requestGeneration !== sessionCheckGenration.current) {
+        return null;
+      }
 
       setUser(currentUser);
       setStatus('authenticated');
 
       return currentUser;
     } catch (error: unknown) {
+
+      // An older failed request must not overwrite newer auth state.
+      if(requestGeneration !== sessionCheckGenration.current) {
+        return null;
+      }
+
       setUser(null);
 
       if (
