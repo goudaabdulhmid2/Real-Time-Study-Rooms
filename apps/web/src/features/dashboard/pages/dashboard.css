@@ -49,3 +49,28 @@
   overflow-wrap: anywhere;
   font-size: 14px;
 }
+
+
+.dashboard-logout {
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-navy);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dashboard-logout:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+.dashboard-logout:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.dashboard-logout-error {
+  color: var(--color-error);
+}

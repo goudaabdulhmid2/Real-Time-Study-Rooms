@@ -7,7 +7,7 @@ import {
 import {LoginPage}  from './features/auth/pages/LoginPage';
 import {RegisterPage}  from './features/auth/pages/RegisterPage';
 import { ProtectedRoute } from './features/auth/components/ProtectedRoute';
-import { DashboardPage } from './features/pages/DashboardPage';
+import { DashboardPage } from './features/dashboard/pages/DashboardPage';
 
 function App() {
   return (

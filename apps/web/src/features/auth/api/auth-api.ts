@@ -38,5 +38,11 @@ export const authApi = {
 
     me(): Promise<CurrentUser> {
         return apiRequest<CurrentUser>('/auth/me')
+    },
+
+    logout(): Promise<unknown> {
+        return apiRequest<unknown>('/auth/logout', {
+            method: 'POST',
+        });
     }
 }

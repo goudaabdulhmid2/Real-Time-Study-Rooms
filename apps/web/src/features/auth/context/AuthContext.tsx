@@ -26,6 +26,7 @@ type AuthContextValue = {
   user: CurrentUser | null;
   status: AuthStatus;
   refreshSession: () => Promise<CurrentUser | null>;
+  logout: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -64,13 +65,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, []);
 
+  const logout = useCallback(async () => {
+    await authApi.logout();
+
+    setUser(null);
+    setStatus('unauthenticated');
+  }, []);
+
   useEffect(() => {
     void refreshSession();
   }, [refreshSession]);
 
   return (
     <AuthContext.Provider
-      value={{ user, status, refreshSession }}
+      value={{ user, status, refreshSession, logout }}
     >
       {children}
     </AuthContext.Provider>
