@@ -5,6 +5,12 @@ const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
   'http://localhost:3000/api/v1';
 
+const REFRESH_VERSION_KEY =
+  'real-time-study-rooms:auth-refresh-version';
+
+const REFRESH_LOCK_NAME =
+  'real-time-study-rooms:auth-refresh';
+
 // Main client used for normal API requests.
 // Its response interceptor handles eligible 401 responses.
 export const apiClient = axios.create({
@@ -29,17 +35,29 @@ const refreshClient = axios.create({
 // Concurrent requests share this Promise instead of starting new refreshes.
 let refreshPromise: Promise<void> | null = null;
 
-// Refreshes the access token once and shares the same operation
-// with other requests that need to refresh at the same time.
-function refreshAccessToken(): Promise<void> {
+// Coordinates token refresh across tabs using a shared browser lock.
+// Reuses the same Promise for concurrent refreshes inside this tab.
+function refreshAccessToken(
+  expectedVersion: string | null
+): Promise<void> {
   if (!refreshPromise) {
-    refreshPromise = refreshClient
-      .post('/auth/refresh')
-      .then(() => undefined)
-      .finally(() => {
-        // Allow a future refresh after this operation finishes or fails.
-        refreshPromise = null;
-      });
+    refreshPromise = navigator.locks.request(REFRESH_LOCK_NAME, async () => {
+      // Check whether another tab already refreshed the token
+      const currentVersion = readRefreshVersion();
+
+      if (currentVersion !== expectedVersion) {
+        return;
+      }
+
+      // No newer refresh was recorded, so perform the refresh.
+      await refreshClient.post('/auth/refresh');
+
+      // Record the new refresh version so other tabs know a refresh occurred.
+      localStorage.setItem(REFRESH_VERSION_KEY, crypto.randomUUID());
+    }).finally(() => {
+      // Clear the shared Promise so future refreshes can start a new one.
+      refreshPromise = null;
+    });
   }
 
   return refreshPromise;
@@ -48,7 +66,29 @@ function refreshAccessToken(): Promise<void> {
 // Adds a flag to Axios request configuration to prevent retry loops.
 type RetryRequestConfig = AxiosRequestConfig & {
   _retry?: boolean;
+  _refreshVersion?: string | null;
 };
+
+// Reads the last known refresh version shared by same-origin tabs.
+function readRefreshVersion(): string | null {
+  try{
+    return localStorage.getItem(REFRESH_VERSION_KEY);
+  }catch{
+    return null;
+  }
+}
+
+// Records the refresh version that existed when each request started.
+apiClient.interceptors.request.use((config) => {
+  const retryableConfig = config as typeof config & {
+    _refreshVersion?: string | null;
+  };
+
+  retryableConfig._refreshVersion = readRefreshVersion();
+
+  return config;
+});
+
 
 // Requests to these endpoints must not trigger automatic token refresh.
 const excludedAuthPaths = [
@@ -96,9 +136,9 @@ apiClient.interceptors.response.use(
     // Mark the request so it cannot be retried more than once.
     originalRequest._retry = true;
 
-    // Wait for the shared refresh operation.
-    // If refresh fails, this throws and the original request is not retried.
-    await refreshAccessToken();
+    // Read the refresh version that existed when this request started.
+    const expectedVersion = originalRequest._refreshVersion ?? null;
+    await refreshAccessToken(expectedVersion);
 
     // Retry the original request after refresh succeeds.
     return apiClient.request(originalRequest);
