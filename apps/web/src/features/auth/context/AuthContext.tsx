@@ -41,11 +41,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [status, setStatus] = useState<AuthStatus>('loading');
 
   // save the current session check generation in a ref so that it persists across renders
-  const sessionCheckGenration = useRef(0);
+  const sessionCheckGeneration = useRef(0);
 
   const refreshSession = useCallback(async () => {
     // Assign a unique generation to this session check.
-    const requestGeneration = ++sessionCheckGenration.current;
+    const requestGeneration = ++sessionCheckGeneration.current;
 
     setStatus('loading');
 
@@ -53,7 +53,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const currentUser = await authApi.me();
 
       // Ignore the result if a newer session check has started.
-      if(requestGeneration !== sessionCheckGenration.current) {
+      if(requestGeneration !== sessionCheckGeneration.current) {
         return null;
       }
 
@@ -64,7 +64,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } catch (error: unknown) {
 
       // An older failed request must not overwrite newer auth state.
-      if(requestGeneration !== sessionCheckGenration.current) {
+      if(requestGeneration !== sessionCheckGeneration.current) {
         return null;
       }
 
@@ -83,11 +83,27 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, []);
 
+// Signs out locally and requests server-side session revocation.
+// Invalidates pending session checks to prevent stale results from
+// restoring an authenticated state after logout.
   const logout = useCallback(async () => {
-    await authApi.logout();
+    // Invalidate all session checks that started before logout.
+    sessionCheckGeneration.current += 1;
 
-    setUser(null);
-    setStatus('unauthenticated');
+    try {
+      // Ask the backend to revoke the session and clear auth cookies.
+      await authApi.logout();
+
+      setUser(null);
+      setStatus('unauthenticated');
+    } catch (error: unknown) {
+      // The server logout was not confirmed, but do not keep
+      // showing the user as authenticated in the frontend.
+      setUser(null);
+      setStatus('error');
+
+      throw error;
+    }
   }, []);
 
   useEffect(() => {
