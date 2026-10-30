@@ -244,11 +244,15 @@ export class AuthService {
         sessionId: string,
         userId: string,
     ): Promise<void> {
-        await this.sessionRepository.revokeSession(
+        const revoked = await this.sessionRepository.revokeSession({
             sessionId,
             userId,
-            new Date()
-        )
+            now: new Date(),
+        });
+
+        if (!revoked) {
+            throw new UnauthorizedException('Invalid or expired session.');
+        }
     }
 
 

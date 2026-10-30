@@ -35,6 +35,12 @@ export interface RotateRefreshTokenInput {
   replacementExpiresAt: Date;
 }
 
+export interface RevokeSessionInput {
+  sessionId: string;
+  userId: string;
+  now: Date;
+}
+
 export type RotateRefreshTokenResult =
   | {
       status: 'ROTATED';
@@ -81,10 +87,8 @@ export abstract class SessionRepository {
   ): Promise<ActiveSessionContext | null>;
 
   abstract revokeSession(
-    sessionId: string,
-    userId: string,
-    now: Date,
-): Promise<void>;
+    input: RevokeSessionInput,
+  ): Promise<boolean>;
 }
 
 
