@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
 
 import { AppModule } from './app.module';
+import { authMeNoStoreMiddleware } from './auth/auth-me-cache.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -28,6 +29,7 @@ async function bootstrap() {
     credentials: true,
   });
 
+  app.use('/api/v1/auth/me', authMeNoStoreMiddleware);
   app.use(cookieParser());
 
   app.useGlobalPipes(
