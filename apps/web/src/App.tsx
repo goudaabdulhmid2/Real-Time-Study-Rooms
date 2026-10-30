@@ -8,6 +8,7 @@ import {LoginPage}  from './features/auth/pages/LoginPage';
 import {RegisterPage}  from './features/auth/pages/RegisterPage';
 import { ProtectedRoute } from './features/auth/components/ProtectedRoute';
 import { DashboardPage } from './features/dashboard/pages/DashboardPage';
+import { GuestOnlyRoute } from './features/auth/components/GuestOnlyRoute';
 
 function App() {
   return (
@@ -17,15 +18,18 @@ function App() {
         element={<Navigate to="/login" replace />}
       />
 
-      <Route
-        path="/login"
-        element={<LoginPage />}
-      />
+      <Route element={<GuestOnlyRoute/>}>
+      
+        <Route
+          path="/login"
+          element={<LoginPage />}
+        />
 
-      <Route
-        path="/register"
-        element={<RegisterPage />}
-      />
+        <Route
+          path="/register"
+          element={<RegisterPage />}
+        />
+      </Route>
 
       <Route element={<ProtectedRoute/>}>
         <Route
