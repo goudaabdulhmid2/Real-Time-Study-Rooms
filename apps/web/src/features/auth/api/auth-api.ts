@@ -1,4 +1,5 @@
 import { apiRequest } from "../../../lib/api-client";
+import { runWithRefreshLock } from "../../../lib/auth-refresh-coordination";
 
 export type RegisterRequest = {
     username: string;
@@ -30,10 +31,12 @@ export const authApi = {
     },
 
     login(input: LoginRequest): Promise<RegisteredUser> {
-        return apiRequest<RegisteredUser>('/auth/login', {
-            method: 'POST',
-            data: input,
-        })
+        return runWithRefreshLock(() =>
+            apiRequest<RegisteredUser>('/auth/login', {
+                method: 'POST',
+                data: input,
+            }),
+        );
     },
 
     me(): Promise<CurrentUser> {

@@ -1,15 +1,13 @@
 import axios, { type AxiosRequestConfig } from 'axios';
+import {
+  readCurrentRefreshVersion,
+  runRefreshWithLock,
+} from './auth-refresh-coordination';
 
 // Base URL shared by all API requests.
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
   'http://localhost:3000/api/v1';
-
-const REFRESH_VERSION_KEY =
-  'real-time-study-rooms:auth-refresh-version';
-
-const REFRESH_LOCK_NAME =
-  'real-time-study-rooms:auth-refresh';
 
 // Main client used for normal API requests.
 // Its response interceptor handles eligible 401 responses.
@@ -40,21 +38,23 @@ let refreshPromise: Promise<void> | null = null;
 function refreshAccessToken(
   expectedVersion: string | null
 ): Promise<void> {
+  // If the browser does not support Web Locks, we cannot safely coordinate refreshes.
+  if(
+    typeof navigator === 'undefined' ||
+    !navigator.locks
+  ){
+    return Promise.reject(
+      new ApiRequestError(
+         'Automatic session refresh requires a secure context and Web Locks support.',
+      )
+    )
+  }
+
   if (!refreshPromise) {
-    refreshPromise = navigator.locks.request(REFRESH_LOCK_NAME, async () => {
-      // Check whether another tab already refreshed the token
-      const currentVersion = readRefreshVersion();
-
-      if (currentVersion !== expectedVersion) {
-        return;
-      }
-
-      // No newer refresh was recorded, so perform the refresh.
-      await refreshClient.post('/auth/refresh');
-
-      // Record the new refresh version so other tabs know a refresh occurred.
-      localStorage.setItem(REFRESH_VERSION_KEY, crypto.randomUUID());
-    }).finally(() => {
+    refreshPromise = runRefreshWithLock(
+      expectedVersion,
+      () => refreshClient.post('/auth/refresh'),
+    ).finally(() => {
       // Clear the shared Promise so future refreshes can start a new one.
       refreshPromise = null;
     });
@@ -69,22 +69,13 @@ type RetryRequestConfig = AxiosRequestConfig & {
   _refreshVersion?: string | null;
 };
 
-// Reads the last known refresh version shared by same-origin tabs.
-function readRefreshVersion(): string | null {
-  try{
-    return localStorage.getItem(REFRESH_VERSION_KEY);
-  }catch{
-    return null;
-  }
-}
-
 // Records the refresh version that existed when each request started.
 apiClient.interceptors.request.use((config) => {
   const retryableConfig = config as typeof config & {
     _refreshVersion?: string | null;
   };
 
-  retryableConfig._refreshVersion = readRefreshVersion();
+  retryableConfig._refreshVersion = readCurrentRefreshVersion();
 
   return config;
 });

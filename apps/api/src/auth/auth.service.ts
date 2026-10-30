@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 
@@ -14,6 +14,8 @@ import { LoginDto } from './dto/login.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly passwordHasher: PasswordHasherService,
@@ -132,17 +134,13 @@ export class AuthService {
         
         // Case 2: Reject unknown tokens.
         if(!currentToken){
-            throw new UnauthorizedException(
-                'Invalid or expired session.'
-            )
+            return this.rejectRefresh('unknown_token');
         }
 
         // Case 3: Expired tokens are invalid regardless of whether they were
         // consumed. Expired-token retries must not revoke an active session.
         if(currentToken.tokenExpiresAt <= now){
-            throw new UnauthorizedException(
-                'Invalid or expired session.'
-            )
+            return this.rejectRefresh('expired_token');
         }
 
         // Case 4: Detect reuse of an unexpired token already consumed by a
@@ -153,21 +151,21 @@ export class AuthService {
                 now
             );
 
-            throw new UnauthorizedException(
-                'Invalid or expired session.'
-            )
+            return this.rejectRefresh('consumed_token_reuse');
         }
 
         // Case 5: Reject expired/revoked sessions and accounts that are no
         // longer active.
-        if(
-            currentToken.sessionExpiresAt <= now ||
-            currentToken.sessionRevokedAt !== null ||
-            currentToken.user.accountStatus !== 'ACTIVE'
-        ){
-            throw new UnauthorizedException(
-                'Invalid or expired session.'
-            )
+        if(currentToken.sessionExpiresAt <= now){
+            return this.rejectRefresh('expired_session');
+        }
+
+        if(currentToken.sessionRevokedAt !== null){
+            return this.rejectRefresh('revoked_session');
+        }
+
+        if(currentToken.user.accountStatus !== 'ACTIVE'){
+            return this.rejectRefresh('inactive_account');
         }
 
         // Case 5: Generate a new random refresh token and keep only its hash in the DB.
@@ -187,9 +185,7 @@ export class AuthService {
             );
         
         if(replacementExpiresAt <= now){
-            throw new UnauthorizedException(
-                'Invalid or expired session.'
-            )
+            return this.rejectRefresh('replacement_expired');
         }
 
         // Case 7: Calculate the new access cookie expiry using the configured TTL.
@@ -214,9 +210,11 @@ export class AuthService {
 
         // The repository commits session revocation before returning REUSED.
         if(rotation.status !== 'ROTATED'){
-            throw new UnauthorizedException(
-                'Invalid or expired session'
-            )
+            return this.rejectRefresh(
+                rotation.status === 'REUSED'
+                    ? 'concurrent_token_reuse'
+                    : 'rotation_invalid',
+            );
         }
 
         // Case 10: Return tokens for the controller to set as HttpOnly cookies.
@@ -233,6 +231,12 @@ export class AuthService {
         
             
         
+    }
+
+    private rejectRefresh(reason: string): never {
+        // Never log the presented token, its hash, or user-controlled credentials.
+        this.logger.warn(`Refresh rejected: ${reason}`);
+        throw new UnauthorizedException('Invalid or expired session.');
     }
 
 

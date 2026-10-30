@@ -1,4 +1,4 @@
-import { Controller, HttpCode, Post, HttpStatus, Body, Res, Req, UnauthorizedException, Get, UseGuards } from "@nestjs/common";
+import { Controller, HttpCode, Post, HttpStatus, Body, Res, Req, UnauthorizedException, Get, UseGuards, Logger } from "@nestjs/common";
 import { ConfigService } from '@nestjs/config';
 import type { Response,Request } from 'express';
 
@@ -10,6 +10,7 @@ import {
   AUTH_COOKIE_PATH,
   REFRESH_TOKEN_COOKIE,
 } from './auth.constants';
+import { getPresentedRefreshToken } from './refresh-cookie';
 import { AuthUser } from "./interfaces/auth-user.interface";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { Throttle } from "@nestjs/throttler";
@@ -22,6 +23,8 @@ interface AuthenticatedRequest extends Request {
     version: '1',
 })
 export class AuthController {
+    private readonly logger = new Logger(AuthController.name);
+
     constructor(
         private readonly authService: AuthService,
         private readonly configService: ConfigService,
@@ -58,13 +61,20 @@ export class AuthController {
         @Req() request: Request,
         @Res({ passthrough: true }) response: Response,
     ){
-        const presentedToken: unknown =
-            request.cookies?[REFRESH_TOKEN_COOKIE]: undefined;
+        const presentedToken = getPresentedRefreshToken(
+            request.cookies,
+            REFRESH_TOKEN_COOKIE,
+        );
+
+        const hasRefreshCookie =
+            typeof presentedToken === 'string' && presentedToken.length > 0;
+        this.logger.log(`Refresh request received; cookiePresent=${hasRefreshCookie}`);
         
         if(
             typeof presentedToken !== 'string' ||
             presentedToken.length === 0
         ){
+            this.logger.warn('Refresh request rejected: cookie_missing_or_unparsed');
             this.ClearAuthCookies(response);
 
             throw new UnauthorizedException(
@@ -83,6 +93,7 @@ export class AuthController {
                 }
         }catch(error: unknown){
             if(error instanceof UnauthorizedException){
+                this.logger.warn('Refresh request rejected by AuthService');
                 this.ClearAuthCookies(response)
             }
 
@@ -137,7 +148,7 @@ export class AuthController {
             expires: result.accessTokenExpiresAt,
         });
 
-        response.cookie('refresh_token', result.refreshToken, {
+        response.cookie(REFRESH_TOKEN_COOKIE, result.refreshToken, {
             httpOnly: true,
             secure,
             sameSite: 'lax',
