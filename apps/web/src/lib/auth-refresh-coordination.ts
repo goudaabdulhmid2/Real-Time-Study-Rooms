@@ -1,6 +1,17 @@
 const REFRESH_VERSION_KEY = 'real-time-study-rooms:auth-refresh-version';
 export const REFRESH_LOCK_NAME = 'real-time-study-rooms:auth-refresh';
 
+// Indicates that safe cross-tab refresh coordination is unavailable.
+export class RefreshCoordinationUnavailableError extends Error {
+  constructor() {
+    super(
+      'Automatic session refresh is unavailable because this browser does not support Web Locks.',
+    );
+
+    this.name = 'RefreshCoordinationUnavailableError';
+  }
+}
+
 export function readCurrentRefreshVersion(): string | null {
   try {
     return localStorage.getItem(REFRESH_VERSION_KEY);
@@ -44,7 +55,7 @@ export async function runRefreshWithLock(
   refresh: () => Promise<unknown>,
 ): Promise<void> {
   if (typeof navigator === 'undefined' || !navigator.locks) {
-    throw new Error('Automatic session refresh requires Web Locks support.');
+    throw new RefreshCoordinationUnavailableError();
   }
 
   await navigator.locks.request(REFRESH_LOCK_NAME, async () => {

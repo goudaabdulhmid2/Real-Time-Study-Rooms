@@ -1,7 +1,10 @@
+
 import axios, { type AxiosRequestConfig } from 'axios';
+
 import {
   readCurrentRefreshVersion,
   runRefreshWithLock,
+  RefreshCoordinationUnavailableError,
 } from './auth-refresh-coordination';
 
 // Base URL shared by all API requests.
@@ -20,7 +23,7 @@ export const apiClient = axios.create({
 });
 
 // Separate client used only for refreshing the access token.
-// It does not use apiClient's response interceptor.
+// It avoids triggering the main client's response interceptor recursively.
 const refreshClient = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
@@ -30,32 +33,20 @@ const refreshClient = axios.create({
 });
 
 // Holds the currently running refresh operation.
-// Concurrent requests share this Promise instead of starting new refreshes.
+// Concurrent requests in this tab share the same Promise.
 let refreshPromise: Promise<void> | null = null;
 
-// Coordinates token refresh across tabs using a shared browser lock.
-// Reuses the same Promise for concurrent refreshes inside this tab.
+// Shares one refresh attempt between concurrent requests in this tab.
+// Cross-tab coordination is handled by runRefreshWithLock().
 function refreshAccessToken(
-  expectedVersion: string | null
+  expectedVersion: string | null,
 ): Promise<void> {
-  // If the browser does not support Web Locks, we cannot safely coordinate refreshes.
-  if(
-    typeof navigator === 'undefined' ||
-    !navigator.locks
-  ){
-    return Promise.reject(
-      new ApiRequestError(
-         'Automatic session refresh requires a secure context and Web Locks support.',
-      )
-    )
-  }
-
   if (!refreshPromise) {
     refreshPromise = runRefreshWithLock(
       expectedVersion,
       () => refreshClient.post('/auth/refresh'),
     ).finally(() => {
-      // Clear the shared Promise so future refreshes can start a new one.
+      // Clear the shared Promise after success or failure.
       refreshPromise = null;
     });
   }
@@ -63,7 +54,9 @@ function refreshAccessToken(
   return refreshPromise;
 }
 
-// Adds a flag to Axios request configuration to prevent retry loops.
+// Adds flags to Axios request configuration.
+// _retry prevents infinite retry loops.
+// _refreshVersion records the version when the request started.
 type RetryRequestConfig = AxiosRequestConfig & {
   _retry?: boolean;
   _refreshVersion?: string | null;
@@ -79,7 +72,6 @@ apiClient.interceptors.request.use((config) => {
 
   return config;
 });
-
 
 // Requests to these endpoints must not trigger automatic token refresh.
 const excludedAuthPaths = [
@@ -127,8 +119,11 @@ apiClient.interceptors.response.use(
     // Mark the request so it cannot be retried more than once.
     originalRequest._retry = true;
 
-    // Read the refresh version that existed when this request started.
-    const expectedVersion = originalRequest._refreshVersion ?? null;
+    // Read the refresh version recorded when this request started.
+    const expectedVersion =
+      originalRequest._refreshVersion ?? null;
+
+    // Wait for the shared refresh operation.
     await refreshAccessToken(expectedVersion);
 
     // Retry the original request after refresh succeeds.
@@ -252,10 +247,16 @@ export async function apiRequest<T>(
 
     return envelope.data as T;
   } catch (error: unknown) {
+    // Preserve the specific error when safe refresh coordination is unavailable.
+    if (error instanceof RefreshCoordinationUnavailableError) {
+      throw error;
+    }
+
     if (error instanceof ApiRequestError) {
       throw error;
     }
 
+    // Convert Axios errors into a consistent application error.
     if (axios.isAxiosError(error)) {
       const payload: unknown = error.response?.data;
 
